@@ -237,6 +237,29 @@ IDEOF
 # bootstrap it before handing off — otherwise the install dies after the
 # venv is built, leaving no config.toml and no `jarvis` on PATH.
 
+# Echo a PATH of the system bin dirs with `zstd` genuinely removed.
+#
+# These two tests assert on the "zstd is absent" branch, so they must not
+# see a host zstd — and plenty of hosts have one: GitHub's ubuntu-latest
+# image ships it, and any machine where a previous end-to-end install ran
+# has it too. PATH order alone can't hide /usr/bin/zstd from `command -v`,
+# so mirror the system bin dirs into a symlink farm minus that one entry.
+_syspath_without_zstd() {
+    local farm="$TEST_TMPDIR/nozstd_bin"
+    mkdir -p "$farm"
+    local d entry name
+    for d in /usr/bin /bin; do
+        [[ -d "$d" ]] || continue
+        for entry in "$d"/*; do
+            name="${entry##*/}"
+            [[ "$name" == "zstd" ]] && continue
+            [[ -e "$farm/$name" ]] && continue
+            ln -sfn "$entry" "$farm/$name" 2>/dev/null || true
+        done
+    done
+    echo "$farm"
+}
+
 # Build a stub PATH with NO ollama and NO zstd, plus sudo + apt-get stubs.
 # $1 — when "provides-zstd", the apt-get stub actually drops a zstd stub on
 # PATH (simulating a successful package install); otherwise it is a no-op
@@ -284,7 +307,7 @@ OLLEOF
 
 @test "installs zstd before handing off to the Ollama installer" {
     _setup_no_ollama_stubs provides-zstd
-    PATH="$NO_OLLAMA_STUBS:/usr/bin:/bin" run bash "$SCRIPT" --no-bg-orchestrator --minimal
+    PATH="$NO_OLLAMA_STUBS:$(_syspath_without_zstd)" run bash "$SCRIPT" --no-bg-orchestrator --minimal
     [ "$status" -eq 0 ]
     # The package manager was asked for zstd, before Ollama's installer ran.
     grep -q "install -y zstd" "$APT_STUB_LOG"
@@ -294,7 +317,7 @@ OLLEOF
 
 @test "warns but still hands off when zstd can't be installed" {
     _setup_no_ollama_stubs no-op
-    PATH="$NO_OLLAMA_STUBS:/usr/bin:/bin" run bash "$SCRIPT" --no-bg-orchestrator --minimal
+    PATH="$NO_OLLAMA_STUBS:$(_syspath_without_zstd)" run bash "$SCRIPT" --no-bg-orchestrator --minimal
     # A missing zstd is not fatal on its own — Ollama still falls back to
     # .tgz for older versions, so the install must carry on to completion.
     [ "$status" -eq 0 ]
