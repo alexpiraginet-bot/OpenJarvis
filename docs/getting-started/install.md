@@ -122,6 +122,21 @@ Manually retry:
 ~/.openjarvis/.scripts/install-rust.sh && ~/.openjarvis/.scripts/build-extension.sh
 ```
 
+### "This version requires zstd for extraction"
+
+Ollama publishes its Linux builds as `.tar.zst`, so installing it needs the
+`zstd` binary. The installer bootstraps `zstd` via your package manager before
+handing off to Ollama, but it can't do that when sudo isn't already
+authenticated — stdin is occupied by the `curl` pipe, so sudo can't prompt.
+
+Install `zstd` and re-run the curl line; completed steps are skipped, so it
+resumes at the Ollama step rather than starting over:
+
+```bash
+sudo apt-get install -y zstd   # Debian/Ubuntu — or: dnf / pacman / zypper / apk
+curl -fsSL https://open-jarvis.github.io/OpenJarvis/install.sh | bash
+```
+
 ### A bigger model failed to download
 
 Check status and retry:

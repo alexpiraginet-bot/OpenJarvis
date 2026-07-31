@@ -155,28 +155,66 @@ EOF
     local sudo=""
     [[ "$(id -u)" -ne 0 ]] && sudo="sudo"
     echo "install.sh: '$tool' not found — installing via the system package manager..."
+    pkg_install "$tool" "$sudo" || true
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        fail_missing_tool "$tool"
+    fi
+}
+
+# System package-manager dispatch, shared by the fatal `need` path above
+# and the best-effort ensure_optional_tool path below. Returns non-zero
+# when no supported package manager is present, or when the install
+# itself fails — the caller decides whether that is fatal.
+pkg_install() {
+    local pkg="$1" sudo_cmd="${2:-}"
     # Use `;` not `&&` between update and install so a transient apt
     # update failure (mirror flake, expired cache) doesn't block install
     # from a still-usable local index.
     if command -v apt-get >/dev/null 2>&1; then
-        $sudo apt-get update -q || true
-        $sudo apt-get install -y "$tool"
+        $sudo_cmd apt-get update -q || true
+        $sudo_cmd apt-get install -y "$pkg"
     elif command -v dnf >/dev/null 2>&1; then
-        $sudo dnf install -y "$tool"
+        $sudo_cmd dnf install -y "$pkg"
     elif command -v yum >/dev/null 2>&1; then
-        $sudo yum install -y "$tool"
+        $sudo_cmd yum install -y "$pkg"
     elif command -v pacman >/dev/null 2>&1; then
-        $sudo pacman -S --noconfirm "$tool"
+        $sudo_cmd pacman -S --noconfirm "$pkg"
     elif command -v zypper >/dev/null 2>&1; then
-        $sudo zypper install -y "$tool"
+        $sudo_cmd zypper install -y "$pkg"
     elif command -v apk >/dev/null 2>&1; then
-        $sudo apk add --no-cache "$tool"
+        $sudo_cmd apk add --no-cache "$pkg"
     else
-        fail_missing_tool "$tool"
+        return 1
     fi
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        fail_missing_tool "$tool"
+}
+
+# Best-effort install of a tool OpenJarvis never invokes itself, but that
+# a third-party installer we hand off to requires. Unlike `need`, failure
+# here is NOT fatal: the caller reports it in context and lets the
+# downstream installer have the final say. Returns 0 if the tool is on
+# PATH afterwards.
+ensure_optional_tool() {
+    local tool="$1" why="$2"
+    if command -v "$tool" >/dev/null 2>&1; then
+        return 0
     fi
+    # pkg_install's dispatch is Linux-only; on macOS the installers we
+    # hand off to need nothing beyond what the base system ships.
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        return 1
+    fi
+    local sudo=""
+    if [[ "$(id -u)" -ne 0 ]]; then
+        # stdin is the curl pipe, so an interactive sudo password prompt
+        # would hang. Only proceed when sudo is already authenticated.
+        if ! sudo -n true 2>/dev/null; then
+            return 1
+        fi
+        sudo="sudo"
+    fi
+    echo "    '$tool' not found ($why) — installing via the system package manager..."
+    pkg_install "$tool" "$sudo" || true
+    command -v "$tool" >/dev/null 2>&1
 }
 
 fail_missing_tool() {
@@ -538,6 +576,31 @@ install_ollama() {
     if command -v ollama >/dev/null 2>&1; then
         echo "    ollama already installed"
         return 0
+    fi
+    # Ollama now ships its Linux builds as .tar.zst and hard-requires the
+    # `zstd` binary to unpack them. zstd is NOT part of a base Debian /
+    # Ubuntu / Fedora install or of most container images, so without
+    # this the handoff below dies with a bare "This version requires zstd
+    # for extraction" — an error in Ollama's voice that never mentions
+    # OpenJarvis, and which lands after the venv is already built, so the
+    # user is left with no config.toml and no `jarvis` on PATH.
+    #
+    # Not fatal on its own: Ollama still falls back to .tgz for older
+    # versions, so if we can't get zstd we warn and hand off anyway
+    # rather than pre-emptively failing an install that might succeed.
+    if [[ "$(uname -s)" == "Linux" ]] \
+        && ! ensure_optional_tool zstd "needed by the Ollama installer"; then
+        cat >&2 <<'EOF'
+    warning: 'zstd' is missing and could not be installed automatically.
+    Ollama needs it to unpack its Linux build. If the next step fails,
+    install zstd and re-run this installer — completed steps are skipped,
+    so it resumes where it stopped:
+
+      Debian/Ubuntu: sudo apt-get install -y zstd
+      Fedora/RHEL:   sudo dnf install -y zstd
+      Arch:          sudo pacman -S zstd
+
+EOF
     fi
     curl -fsSL https://ollama.com/install.sh | sh
 }

@@ -21,6 +21,26 @@ stack with `mss`/`Pillow` fallbacks on other platforms. Adds the
 `JARVIS_NUM_CTX` environment variable to tune the Ollama context window
 (default `16384`).
 
+### Fixed
+
+**`curl … | bash` install aborted at the Ollama step on hosts without
+`zstd`.** Ollama now publishes its Linux builds as `.tar.zst`, and its
+install script hard-requires the `zstd` binary to unpack them. `zstd` is
+not part of a base Debian/Ubuntu, Fedora or Alpine install and is absent
+from most container images, so the one-liner died at step 6 of 12 with a
+bare `ERROR: This version requires zstd for extraction` — an error in
+Ollama's voice that never mentioned OpenJarvis. It landed *after* the
+clone, venv and editable install had succeeded, leaving `~/.openjarvis`
+on disk with no `config.toml`, no `jarvis` symlink and no PATH entry.
+`install.sh` now bootstraps `zstd` through the same package-manager
+dispatch it already used for `git` and `curl` (apt-get / dnf / yum /
+pacman / zypper / apk) before handing off. The bootstrap is best-effort
+and never fatal on its own — Ollama still falls back to `.tgz` for older
+versions — and when it can't run (sudo not pre-authenticated, since stdin
+is the curl pipe) the installer says so in its own voice with the exact
+command to run and a note that re-running resumes from where it stopped.
+Skipped entirely when `ollama` is already installed.
+
 ## [1.0.2] - 2026-05-24
 
 A patch release that fixes a packaging bug which broke the v1.0.1
