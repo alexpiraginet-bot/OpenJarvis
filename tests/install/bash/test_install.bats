@@ -228,3 +228,118 @@ IDEOF
     # (the upper bound of >=3.10,<3.14 is 3.14, so the highest usable is 3.13).
     grep -q '^venv --python 3.13' "$UV_STUB_LOG"
 }
+
+# --- zstd bootstrap for the Ollama handoff -------------------------------
+#
+# Ollama ships its Linux builds as .tar.zst and aborts with "This version
+# requires zstd for extraction" when the `zstd` binary is missing. zstd is
+# not part of a base Debian/Ubuntu/Fedora install, so install.sh has to
+# bootstrap it before handing off — otherwise the install dies after the
+# venv is built, leaving no config.toml and no `jarvis` on PATH.
+
+# Echo a PATH of the system bin dirs with `zstd` genuinely removed.
+#
+# These two tests assert on the "zstd is absent" branch, so they must not
+# see a host zstd — and plenty of hosts have one: GitHub's ubuntu-latest
+# image ships it, and any machine where a previous end-to-end install ran
+# has it too. PATH order alone can't hide /usr/bin/zstd from `command -v`,
+# so mirror the system bin dirs into a symlink farm minus that one entry.
+_syspath_without_zstd() {
+    local farm="$TEST_TMPDIR/nozstd_bin"
+    mkdir -p "$farm"
+    local d entry name
+    for d in /usr/bin /bin; do
+        [[ -d "$d" ]] || continue
+        for entry in "$d"/*; do
+            name="${entry##*/}"
+            [[ "$name" == "zstd" ]] && continue
+            [[ -e "$farm/$name" ]] && continue
+            ln -sfn "$entry" "$farm/$name" 2>/dev/null || true
+        done
+    done
+    echo "$farm"
+}
+
+# Build a stub PATH with NO ollama and NO zstd, plus sudo + apt-get stubs.
+# $1 — when "provides-zstd", the apt-get stub actually drops a zstd stub on
+# PATH (simulating a successful package install); otherwise it is a no-op
+# (simulating a package manager that can't supply it).
+_setup_no_ollama_stubs() {
+    local apt_behavior="$1"
+    NO_OLLAMA_STUBS="$TEST_TMPDIR/no_ollama_stubs"
+    mkdir -p "$NO_OLLAMA_STUBS"
+    for f in git curl uv cargo rustup; do
+        cp "$PER_TEST_STUBS/$f" "$NO_OLLAMA_STUBS/"
+    done
+
+    export APT_STUB_LOG="$TEST_TMPDIR/apt.log"
+    : > "$APT_STUB_LOG"
+    {
+        echo '#!/usr/bin/env bash'
+        echo 'echo "$@" >> "$APT_STUB_LOG"'
+        if [[ "$apt_behavior" == "provides-zstd" ]]; then
+            echo "if [[ \" \$* \" == *\" zstd \"* ]]; then"
+            echo "    printf '%s\\n' '#!/usr/bin/env bash' 'exit 0' > '$NO_OLLAMA_STUBS/zstd'"
+            echo "    chmod +x '$NO_OLLAMA_STUBS/zstd'"
+            echo "fi"
+        fi
+        echo 'exit 0'
+    } > "$NO_OLLAMA_STUBS/apt-get"
+
+    # `sudo -n true` is the non-interactive auth probe; anything else is
+    # the wrapped command and just runs through.
+    cat > "$NO_OLLAMA_STUBS/sudo" <<'SUDOEOF'
+#!/usr/bin/env bash
+[[ "$1" == "-n" ]] && exit 0
+exec "$@"
+SUDOEOF
+
+    # What `curl -fsSL https://ollama.com/install.sh | sh` executes. Like
+    # the real installer, it puts an `ollama` binary on PATH.
+    cat > "$TEST_TMPDIR/ollama-install.sh" <<OLLEOF
+cp "$STUBS_DIR/ollama" "$NO_OLLAMA_STUBS/ollama"
+chmod +x "$NO_OLLAMA_STUBS/ollama"
+OLLEOF
+    export CURL_STUB_OUTPUT_FILE="$TEST_TMPDIR/ollama-install.sh"
+
+    chmod +x "$NO_OLLAMA_STUBS"/*
+}
+
+@test "installs zstd before handing off to the Ollama installer" {
+    _setup_no_ollama_stubs provides-zstd
+    PATH="$NO_OLLAMA_STUBS:$(_syspath_without_zstd)" run bash "$SCRIPT" --no-bg-orchestrator --minimal
+    [ "$status" -eq 0 ]
+    # The package manager was asked for zstd, before Ollama's installer ran.
+    grep -q "install -y zstd" "$APT_STUB_LOG"
+    # zstd was obtained, so no fallback warning should be printed.
+    ! echo "$output" | grep -q "could not be installed automatically"
+}
+
+@test "warns but still hands off when zstd can't be installed" {
+    _setup_no_ollama_stubs no-op
+    PATH="$NO_OLLAMA_STUBS:$(_syspath_without_zstd)" run bash "$SCRIPT" --no-bg-orchestrator --minimal
+    # A missing zstd is not fatal on its own — Ollama still falls back to
+    # .tgz for older versions, so the install must carry on to completion.
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "zstd"
+    echo "$output" | grep -q "could not be installed automatically"
+    # And the advice has to be actionable, in OpenJarvis's own voice.
+    echo "$output" | grep -q "apt-get install -y zstd"
+    echo "$output" | grep -q "re-run this installer"
+}
+
+@test "skips the zstd bootstrap when ollama is already installed" {
+    # PER_TEST_STUBS has an ollama stub, so install_ollama returns early
+    # and must not touch the package manager at all.
+    export APT_STUB_LOG="$TEST_TMPDIR/apt.log"
+    : > "$APT_STUB_LOG"
+    cat > "$PER_TEST_STUBS/apt-get" <<'APTEOF'
+#!/usr/bin/env bash
+echo "$@" >> "$APT_STUB_LOG"
+exit 0
+APTEOF
+    chmod +x "$PER_TEST_STUBS/apt-get"
+    run bash "$SCRIPT" --no-bg-orchestrator --minimal
+    [ "$status" -eq 0 ]
+    [ ! -s "$APT_STUB_LOG" ]
+}
