@@ -189,6 +189,7 @@ nav:
       - Simple Chat: user-guide/chat-simple.md
       - Agents: user-guide/agents.md
       - Channels & Connectors: user-guide/channels-and-connectors.md
+      - Retail Footfall: user-guide/retail-footfall.md
       - Tools: user-guide/tools.md
       - Memory: user-guide/memory.md
       - External MCP Servers: user-guide/mcp-external-servers.md
