@@ -14,13 +14,13 @@ value is bound as a parameter.
 
 from __future__ import annotations
 
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from openjarvis.life.db import Database, connect
 from openjarvis.life.schema import SCHEMA, TableSpec, ensure_schema
 
 #: Operators a caller may use in a filter. Anything else is rejected rather
@@ -76,27 +76,24 @@ class LifeStore:
 
     def __init__(
         self,
-        db_path: str | Path,
+        db_path: str | Path = "",
         *,
-        conn: Optional[sqlite3.Connection] = None,
+        db: Optional[Database] = None,
     ) -> None:
-        """Open (or adopt) the Life database and ensure the schema exists."""
-        self._db_path = str(db_path)
-        self._owns_conn = conn is None
-        if conn is None:
-            conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            # WAL keeps the API responsive while a scheduled agent writes:
-            # readers no longer block behind a writer. Mirrors the fix applied
-            # to TelemetryStore for SQLITE_BUSY under concurrency.
-            conn.execute("PRAGMA journal_mode=WAL")
-        self._conn = conn
-        ensure_schema(self._conn)
+        """Open (or adopt) the Life database and ensure the schema exists.
+
+        ``db_path`` may be a SQLite path or a PostgreSQL DSN; passing ``db``
+        shares an already-open connection, which is how identity and domain
+        data end up in one transaction scope.
+        """
+        self._owns_db = db is None
+        self._db = db if db is not None else connect(str(db_path) or None)
+        ensure_schema(self._db)
 
     @property
-    def connection(self) -> sqlite3.Connection:
-        """The underlying connection, for stores sharing this database."""
-        return self._conn
+    def connection(self) -> Database:
+        """The underlying database, for stores sharing this connection."""
+        return self._db
 
     # -- Writes --------------------------------------------------------------
 
@@ -111,11 +108,11 @@ class LifeStore:
         record_id = uuid.uuid4().hex
         placeholders = ", ".join("?" for _ in range(len(columns) + 3))
         column_sql = ", ".join(("id", "user_id", *columns, "created_at"))
-        self._conn.execute(
+        self._db.execute(
             f"INSERT INTO {spec.name} ({column_sql}) VALUES ({placeholders})",
             (record_id, user_id, *data.values(), _now()),
         )
-        self._conn.commit()
+        self._db.commit()
         return record_id
 
     def update(
@@ -131,29 +128,29 @@ class LifeStore:
             return self.get(table, user_id, record_id) is not None
         columns = [_check_column(spec, key) for key in data]
         assignments = ", ".join(f"{col} = ?" for col in columns)
-        cur = self._conn.execute(
+        cur = self._db.execute(
             f"UPDATE {spec.name} SET {assignments} WHERE id = ? AND user_id = ?",
             (*data.values(), record_id, user_id),
         )
-        self._conn.commit()
+        self._db.commit()
         return cur.rowcount > 0
 
     def delete(self, table: str, user_id: str, record_id: str) -> bool:
         """Delete a row. Returns whether one was removed."""
         spec = _spec(table)
-        cur = self._conn.execute(
+        cur = self._db.execute(
             f"DELETE FROM {spec.name} WHERE id = ? AND user_id = ?",
             (record_id, user_id),
         )
-        self._conn.commit()
+        self._db.commit()
         return cur.rowcount > 0
 
     def delete_where(self, table: str, user_id: str, filters: Sequence[Filter]) -> int:
         """Delete every matching row for this user. Returns the count."""
         spec = _spec(table)
         where_sql, params = self._build_where(spec, user_id, filters)
-        cur = self._conn.execute(f"DELETE FROM {spec.name} {where_sql}", params)
-        self._conn.commit()
+        cur = self._db.execute(f"DELETE FROM {spec.name} {where_sql}", params)
+        self._db.commit()
         return cur.rowcount
 
     # -- Reads ---------------------------------------------------------------
@@ -161,7 +158,7 @@ class LifeStore:
     def get(self, table: str, user_id: str, record_id: str) -> Optional[Dict[str, Any]]:
         """Fetch one row by id, scoped to the user."""
         spec = _spec(table)
-        row = self._conn.execute(
+        row = self._db.execute(
             f"SELECT * FROM {spec.name} WHERE id = ? AND user_id = ?",
             (record_id, user_id),
         ).fetchone()
@@ -183,7 +180,7 @@ class LifeStore:
         where_sql, params = self._build_where(spec, user_id, filters)
         order_col = _check_column(spec, order_by, readable=True)
         direction = "DESC" if descending else "ASC"
-        rows = self._conn.execute(
+        rows = self._db.execute(
             f"SELECT * FROM {spec.name} {where_sql}"
             f" ORDER BY {order_col} {direction} LIMIT ? OFFSET ?",
             (*params, max(1, min(limit, 1000)), max(0, offset)),
@@ -194,7 +191,7 @@ class LifeStore:
         """Count matching rows for a user."""
         spec = _spec(table)
         where_sql, params = self._build_where(spec, user_id, filters)
-        row = self._conn.execute(
+        row = self._db.execute(
             f"SELECT COUNT(*) AS n FROM {spec.name} {where_sql}", params
         ).fetchone()
         return int(row["n"]) if row else 0
@@ -211,7 +208,7 @@ class LifeStore:
         spec = _spec(table)
         col = _check_column(spec, column, readable=True)
         where_sql, params = self._build_where(spec, user_id, filters)
-        row = self._conn.execute(
+        row = self._db.execute(
             f"SELECT COALESCE(SUM({col}), 0) AS total FROM {spec.name} {where_sql}",
             params,
         ).fetchone()
@@ -231,7 +228,7 @@ class LifeStore:
         group_col = _check_column(spec, group_column, readable=True)
         value_col = _check_column(spec, sum_column, readable=True)
         where_sql, params = self._build_where(spec, user_id, filters)
-        rows = self._conn.execute(
+        rows = self._db.execute(
             f"SELECT {group_col} AS label, COALESCE(SUM({value_col}), 0) AS total"
             f" FROM {spec.name} {where_sql} GROUP BY {group_col}"
             " ORDER BY total DESC",
@@ -273,5 +270,5 @@ class LifeStore:
 
     def close(self) -> None:
         """Close the connection when this store owns it."""
-        if self._owns_conn:
-            self._conn.close()
+        if self._owns_db:
+            self._db.close()

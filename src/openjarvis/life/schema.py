@@ -21,9 +21,11 @@ the generic CRUD layer safe.
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import TYPE_CHECKING, Dict, Tuple
+
+if TYPE_CHECKING:
+    from openjarvis.life.db import Database
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,10 +462,11 @@ APPS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create every table and index if missing. Safe to call repeatedly."""
-    for ddl in _ALL_DDL:
-        conn.execute(ddl)
-    for index in _INDEXES:
-        conn.execute(index)
-    conn.commit()
+def ensure_schema(db: "Database") -> None:
+    """Create every table and index if missing. Safe to call repeatedly.
+
+    The DDL is deliberately portable: only TEXT/INTEGER/REAL columns and text
+    primary keys, which mean the same thing to SQLite and PostgreSQL. No
+    AUTOINCREMENT, no SERIAL — so one definition serves both backends.
+    """
+    db.executescript([*_ALL_DDL, *_INDEXES])

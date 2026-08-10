@@ -85,6 +85,12 @@ server = [
     "pydantic>=2.0",
     "python-multipart>=0.0.9",
 ]
+# PostgreSQL for the hosted Life app. Optional on purpose: local development
+# and the test suite run on SQLite with no server, and a serverless deployment
+# is the only place that actually needs Postgres — see openjarvis/life/db.py.
+life-postgres = [
+    "psycopg[binary]>=3.1",
+]
 desktop = [
     "fastapi>=0.110",
     "uvicorn>=0.30",

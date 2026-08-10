@@ -115,7 +115,7 @@ class LifeNotifier:
 
     def __init__(self, service: LifeService) -> None:
         self._service = service
-        self._conn = service.store.connection
+        self._db = service.store.connection
 
     def pending_alerts(
         self, user: User, *, anchor: Optional[date] = None
@@ -175,7 +175,7 @@ class LifeNotifier:
     # -- Internals -----------------------------------------------------------
 
     def _sent_fingerprints(self, user_id: str, anchor: date) -> set:
-        rows = self._conn.execute(
+        rows = self._db.execute(
             "SELECT fingerprint FROM notifications WHERE user_id = ? AND sent_on = ?",
             (user_id, anchor.isoformat()),
         ).fetchall()
@@ -189,10 +189,10 @@ class LifeNotifier:
         channel_name: str,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        self._conn.executemany(
-            "INSERT OR IGNORE INTO notifications"
+        self._db.executemany(
+            "INSERT INTO notifications"
             " (id, user_id, fingerprint, sent_on, channel, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             [
                 (
                     uuid.uuid4().hex,
@@ -205,7 +205,7 @@ class LifeNotifier:
                 for alert in alerts
             ],
         )
-        self._conn.commit()
+        self._db.commit()
 
 
 __all__ = [

@@ -18,12 +18,12 @@ storage onto a single shared connection::
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from openjarvis.life.db import Database, connect
 from openjarvis.life.schema import APPS, SCHEMA, TableSpec, ensure_schema
 from openjarvis.life.service import LifeService, LifeServiceError
 from openjarvis.life.store import Filter, LifeStore, LifeStoreError
@@ -64,7 +64,7 @@ class LifeContext:
     users: UserStore
     store: LifeStore
     service: LifeService
-    connection: sqlite3.Connection
+    connection: Database
 
     def today(
         self,
@@ -88,22 +88,22 @@ class LifeContext:
 def open_life(db_path: str | Path | None = None) -> LifeContext:
     """Open the Life database and return identity + storage + service.
 
-    One connection is shared across both stores so a bill payment (which
-    touches bills, transactions and accounts) commits atomically instead of
-    racing itself across two handles on the same file.
-    """
-    resolved = Path(db_path) if db_path is not None else default_db_path()
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(resolved), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    ensure_schema(conn)
+    ``db_path`` may be a SQLite path or a PostgreSQL DSN; omitted, it falls
+    back to ``OPENJARVIS_LIFE_DB`` and then to a file under the data directory.
 
-    store = LifeStore(resolved, conn=conn)
-    users = UserStore(resolved, conn=conn)
+    One connection is shared across both stores so a bill payment — which
+    touches bills, transactions and accounts — commits atomically instead of
+    racing itself across two handles on the same database.
+    """
+    target = str(db_path) if db_path is not None else None
+    db = connect(target)
+    ensure_schema(db)
+
+    store = LifeStore(db=db)
+    users = UserStore(db=db)
     return LifeContext(
         users=users,
         store=store,
         service=LifeService(store),
-        connection=conn,
+        connection=db,
     )

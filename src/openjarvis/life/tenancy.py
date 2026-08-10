@@ -22,13 +22,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from openjarvis.life.db import Database, connect
 from openjarvis.life.schema import ensure_schema
 
 _SCRYPT_N = 2**14
@@ -105,38 +105,47 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _is_unique_violation(exc: BaseException) -> bool:
+    """Whether a driver exception is a unique-constraint violation.
+
+    sqlite3 and psycopg each raise their own ``IntegrityError``, and importing
+    psycopg here just to catch it would make the SQLite path depend on the
+    Postgres extra. Matching on the class name keeps one code path for both.
+    """
+    for klass in type(exc).__mro__:
+        if klass.__name__ in ("IntegrityError", "UniqueViolation"):
+            return True
+    return False
+
+
 def _attempt_key(email: str) -> str:
     """Hash an address for the throttle table, so it stores no addresses."""
     return hashlib.sha256(_normalize_email(email).encode("utf-8")).hexdigest()
 
 
 class UserStore:
-    """SQLite-backed registry of users and their bearer tokens."""
+    """Registry of clients and their bearer tokens, on SQLite or Postgres."""
 
     def __init__(
         self,
-        db_path: str | Path,
+        db_path: str | Path = "",
         *,
-        conn: Optional[sqlite3.Connection] = None,
+        db: Optional[Database] = None,
     ) -> None:
         """Open (or adopt) the Life database and ensure the schema exists.
 
-        Passing ``conn`` lets :class:`~openjarvis.life.store.LifeStore` share a
-        single connection so identity and domain data live in one file and one
-        transaction scope.
+        Passing ``db`` lets :class:`~openjarvis.life.store.LifeStore` share a
+        single connection so identity and domain data live in one database and
+        one transaction scope.
         """
-        self._db_path = str(db_path)
-        self._owns_conn = conn is None
-        if conn is None:
-            conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-        self._conn = conn
-        ensure_schema(self._conn)
+        self._owns_db = db is None
+        self._db = db if db is not None else connect(str(db_path) or None)
+        ensure_schema(self._db)
 
     @property
-    def connection(self) -> sqlite3.Connection:
-        """The underlying connection, for stores that share this database."""
-        return self._conn
+    def connection(self) -> Database:
+        """The underlying database, for stores that share this connection."""
+        return self._db
 
     # -- Users ---------------------------------------------------------------
 
@@ -174,7 +183,7 @@ class UserStore:
             created_at=_now(),
         )
         try:
-            self._conn.execute(
+            self._db.execute(
                 "INSERT INTO users (id, email, name, password_hash, salt,"
                 " timezone, currency, locale, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -190,8 +199,13 @@ class UserStore:
                     user.created_at,
                 ),
             )
-            self._conn.commit()
-        except sqlite3.IntegrityError as exc:
+            self._db.commit()
+        except Exception as exc:
+            # Both drivers raise their own IntegrityError subclass; the unique
+            # index on `email` is the only constraint this INSERT can violate.
+            if not _is_unique_violation(exc):
+                raise
+            self._db.rollback()
             raise AuthError("Email is already registered") from exc
         return user
 
@@ -201,7 +215,7 @@ class UserStore:
         Callers must not distinguish "no such email" from "bad password" in
         their responses — that difference is a user-enumeration oracle.
         """
-        row = self._conn.execute(
+        row = self._db.execute(
             "SELECT * FROM users WHERE email = ?", (_normalize_email(email),)
         ).fetchone()
         if row is None:
@@ -228,7 +242,7 @@ class UserStore:
         addresses exist.
         """
         now = now or datetime.now(timezone.utc)
-        row = self._conn.execute(
+        row = self._db.execute(
             "SELECT locked_until FROM login_attempts WHERE key = ?",
             (_attempt_key(email),),
         ).fetchone()
@@ -252,7 +266,7 @@ class UserStore:
         """
         now = now or datetime.now(timezone.utc)
         key = _attempt_key(email)
-        row = self._conn.execute(
+        row = self._db.execute(
             "SELECT failures, first_failure_at FROM login_attempts WHERE key = ?",
             (key,),
         ).fetchone()
@@ -275,7 +289,7 @@ class UserStore:
         if failures >= MAX_LOGIN_FAILURES:
             locked_until = (now + timedelta(seconds=LOCKOUT_SECONDS)).isoformat()
 
-        self._conn.execute(
+        self._db.execute(
             "INSERT INTO login_attempts (key, failures, first_failure_at,"
             " locked_until) VALUES (?, ?, ?, ?)"
             " ON CONFLICT(key) DO UPDATE SET failures = excluded.failures,"
@@ -283,19 +297,19 @@ class UserStore:
             " locked_until = excluded.locked_until",
             (key, failures, first_failure_at.isoformat(), locked_until or None),
         )
-        self._conn.commit()
+        self._db.commit()
         return LOCKOUT_SECONDS if locked_until else 0
 
     def clear_login_failures(self, email: str) -> None:
         """Forget an address's failures — called on every successful login."""
-        self._conn.execute(
+        self._db.execute(
             "DELETE FROM login_attempts WHERE key = ?", (_attempt_key(email),)
         )
-        self._conn.commit()
+        self._db.commit()
 
     def get_user(self, user_id: str) -> Optional[User]:
         """Look up a user by id."""
-        row = self._conn.execute(
+        row = self._db.execute(
             "SELECT * FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         return self._row_to_user(row) if row else None
@@ -307,16 +321,16 @@ class UserStore:
         if not updates:
             return self.get_user(user_id)
         assignments = ", ".join(f"{col} = ?" for col in updates)
-        self._conn.execute(
+        self._db.execute(
             f"UPDATE users SET {assignments} WHERE id = ?",
             (*updates.values(), user_id),
         )
-        self._conn.commit()
+        self._db.commit()
         return self.get_user(user_id)
 
     def count_users(self) -> int:
         """Total registered clients — used to gate first-run bootstrap."""
-        row = self._conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+        row = self._db.execute("SELECT COUNT(*) AS n FROM users").fetchone()
         return int(row["n"]) if row else 0
 
     # -- Tokens --------------------------------------------------------------
@@ -335,12 +349,12 @@ class UserStore:
         """
         token = secrets.token_urlsafe(32)
         expires = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
-        self._conn.execute(
+        self._db.execute(
             "INSERT INTO auth_tokens (token_hash, user_id, label, created_at,"
             " expires_at) VALUES (?, ?, ?, ?, ?)",
             (_hash_token(token), user_id, label, _now(), expires),
         )
-        self._conn.commit()
+        self._db.commit()
         return token
 
     def resolve_token(self, token: str) -> Optional[str]:
@@ -352,7 +366,7 @@ class UserStore:
         if not token:
             return None
         token_hash = _hash_token(token)
-        row = self._conn.execute(
+        row = self._db.execute(
             "SELECT user_id, expires_at FROM auth_tokens WHERE token_hash = ?",
             (token_hash,),
         ).fetchone()
@@ -368,32 +382,30 @@ class UserStore:
                 # An unparseable expiry is a corrupt row, not a valid session.
                 self.revoke_token(token)
                 return None
-        self._conn.execute(
+        self._db.execute(
             "UPDATE auth_tokens SET last_used_at = ? WHERE token_hash = ?",
             (_now(), token_hash),
         )
-        self._conn.commit()
+        self._db.commit()
         return str(row["user_id"])
 
     def revoke_token(self, token: str) -> bool:
         """Invalidate a single token (logout). Returns whether one was removed."""
-        cur = self._conn.execute(
+        cur = self._db.execute(
             "DELETE FROM auth_tokens WHERE token_hash = ?", (_hash_token(token),)
         )
-        self._conn.commit()
+        self._db.commit()
         return cur.rowcount > 0
 
     def revoke_all_tokens(self, user_id: str) -> int:
         """Invalidate every session for a user (lost device). Returns the count."""
-        cur = self._conn.execute(
-            "DELETE FROM auth_tokens WHERE user_id = ?", (user_id,)
-        )
-        self._conn.commit()
+        cur = self._db.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+        self._db.commit()
         return cur.rowcount
 
     def list_sessions(self, user_id: str) -> List[Dict[str, Any]]:
         """Active sessions for a user, newest first. Never exposes token hashes."""
-        rows = self._conn.execute(
+        rows = self._db.execute(
             "SELECT label, created_at, last_used_at, expires_at FROM auth_tokens"
             " WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
@@ -404,11 +416,11 @@ class UserStore:
 
     def close(self) -> None:
         """Close the connection when this store owns it."""
-        if self._owns_conn:
-            self._conn.close()
+        if self._owns_db:
+            self._db.close()
 
     @staticmethod
-    def _row_to_user(row: sqlite3.Row) -> User:
+    def _row_to_user(row: Any) -> User:
         return User(
             id=row["id"],
             email=row["email"],
