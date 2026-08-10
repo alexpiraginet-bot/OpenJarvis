@@ -43,6 +43,19 @@ interface SpeechRecognitionLike {
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
+interface NativeVoiceHandler {
+  postMessage(message: { action: 'start' | 'stop' | 'speak'; text?: string }): void;
+}
+
+interface NativeVoiceEventDetail {
+  type: 'state' | 'transcript' | 'level' | 'error';
+  state?: VoiceStatus;
+  text?: string;
+  final?: boolean;
+  level?: number;
+  spectrum?: number[];
+}
+
 /** Diagnostics go to the console, never to the client's screen. */
 function logger(message: string): void {
   if (import.meta.env.DEV) console.debug('[voice]', message);
@@ -56,12 +69,24 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
   return scope.SpeechRecognition ?? scope.webkitSpeechRecognition ?? null;
 }
 
+function getNativeVoiceHandler(): NativeVoiceHandler | null {
+  const scope = window as unknown as {
+    webkit?: {
+      messageHandlers?: {
+        jarvisVoice?: NativeVoiceHandler;
+      };
+    };
+  };
+  return scope.webkit?.messageHandlers?.jarvisVoice ?? null;
+}
+
 export type VoiceStatus = 'idle' | 'listening' | 'thinking' | 'speaking' | 'denied';
 
 export interface VoiceState {
   status: VoiceStatus;
   /**
-   * Live 0–1 loudness and frequency bins, exposed as refs rather than state.
+   * Live 0–1 loudness and signal bins, exposed as refs rather than state.
+   * The browser supplies frequency bins; the native shell supplies time bins.
    *
    * These update on every animation frame. Routing them through `useState`
    * would re-render the whole shell 60 times a second to move a few pixels of
@@ -102,7 +127,60 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
   const onFinalRef = useRef(onFinalTranscript);
   onFinalRef.current = onFinalTranscript;
 
-  const supported = typeof window !== 'undefined' && getRecognitionCtor() !== null;
+  const supported =
+    typeof window !== 'undefined' &&
+    (getNativeVoiceHandler() !== null || getRecognitionCtor() !== null);
+
+  useEffect(() => {
+    const onNativeVoice = (event: Event) => {
+      const detail = (event as CustomEvent<NativeVoiceEventDetail>).detail;
+      if (!detail) return;
+
+      if (detail.type === 'error') {
+        wantListeningRef.current = false;
+        setInterim('');
+        setError(detail.text || 'Não consegui acessar o microfone.');
+        setStatus('denied');
+        return;
+      }
+
+      if (detail.type === 'state' && detail.state) {
+        setStatus(detail.state);
+        if (detail.state === 'listening') setError('');
+        if (detail.state !== 'listening') {
+          levelRef.current = 0;
+          spectrumRef.current = new Uint8Array(BIN_COUNT);
+        }
+        return;
+      }
+
+      if (detail.type === 'level') {
+        levelRef.current = Math.max(0, Math.min(1, detail.level ?? 0));
+        if (Array.isArray(detail.spectrum)) {
+          spectrumRef.current = Uint8Array.from(
+            detail.spectrum.slice(0, BIN_COUNT),
+            (value) => Math.max(0, Math.min(255, Math.round(value))),
+          );
+        }
+        return;
+      }
+
+      if (detail.type === 'transcript' && detail.text?.trim()) {
+        const text = detail.text.trim();
+        if (detail.final) {
+          wantListeningRef.current = false;
+          setTranscript(text);
+          setInterim('');
+          onFinalRef.current(text);
+        } else {
+          setInterim(text);
+        }
+      }
+    };
+
+    window.addEventListener('jarvis-native-voice', onNativeVoice);
+    return () => window.removeEventListener('jarvis-native-voice', onNativeVoice);
+  }, []);
 
   const teardownAudio = useCallback(() => {
     cancelAnimationFrame(frameRef.current);
@@ -154,10 +232,31 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
   const start = useCallback(() => {
     setError('');
     wantListeningRef.current = true;
+    window.speechSynthesis?.cancel();
+
+    const nativeVoice = getNativeVoiceHandler();
+    if (nativeVoice) {
+      nativeVoice.postMessage({ action: 'start' });
+      setStatus('listening');
+      return;
+    }
 
     startAudio()
-      .then(() => setStatus('listening'))
+      .then(() => {
+        if (wantListeningRef.current) {
+          setError('');
+          setStatus('listening');
+        } else {
+          teardownAudio();
+        }
+      })
       .catch(() => {
+        if (!wantListeningRef.current) {
+          teardownAudio();
+          return;
+        }
+        recognitionRef.current?.abort();
+        recognitionRef.current = null;
         setError('Preciso do microfone para ouvir você.');
         setStatus('denied');
         wantListeningRef.current = false;
@@ -181,6 +280,10 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
       }
       setInterim(pending);
       if (finalText.trim()) {
+        wantListeningRef.current = false;
+        recognition.stop();
+        recognitionRef.current = null;
+        teardownAudio();
         setTranscript(finalText.trim());
         setInterim('');
         onFinalRef.current(finalText.trim());
@@ -196,6 +299,8 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
       // Painting the HUD red with a raw error code teaches people to distrust
       // a working app.
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        recognitionRef.current = null;
+        teardownAudio();
         setError('Preciso do microfone para ouvir você. Libere nas permissões.');
         setStatus('denied');
         wantListeningRef.current = false;
@@ -222,19 +327,28 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     } catch {
       /* start() throws if called twice — harmless */
     }
-  }, [startAudio]);
+  }, [startAudio, teardownAudio]);
 
   const stop = useCallback(() => {
     wantListeningRef.current = false;
+    getNativeVoiceHandler()?.postMessage({ action: 'stop' });
     recognitionRef.current?.stop();
     recognitionRef.current = null;
     teardownAudio();
     setInterim('');
+    setError('');
     setStatus('idle');
   }, [teardownAudio]);
 
   const speak = useCallback((text: string) => {
-    if (!text || typeof window.speechSynthesis === 'undefined') return;
+    if (!text) return;
+    const nativeVoice = getNativeVoiceHandler();
+    if (nativeVoice) {
+      setStatus('speaking');
+      nativeVoice.postMessage({ action: 'speak', text });
+      return;
+    }
+    if (typeof window.speechSynthesis === 'undefined') return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'pt-BR';

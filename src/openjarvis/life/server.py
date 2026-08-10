@@ -20,15 +20,20 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+from types import SimpleNamespace
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from openjarvis.life.db import configured_database_target
 from openjarvis.server.life_routes import create_life_router
 
 logger = logging.getLogger(__name__)
+
+_CLOUD_API_KEY_ENV_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
 
 #: Where `npm run build` puts the PWA.
 _STATIC_DIR = pathlib.Path(__file__).resolve().parents[1] / "server" / "static"
@@ -39,6 +44,8 @@ def create_life_app(
     db_path: str = "",
     cors_origins: list[str] | None = None,
     serve_static: bool = True,
+    engine: Any | None = None,
+    model: str | None = None,
 ) -> FastAPI:
     """Build the Life-only application.
 
@@ -55,18 +62,43 @@ def create_life_app(
     # A phone app is served from the same origin in production, so the default
     # is deliberately narrow — dev servers only. Widen it explicitly per
     # deployment rather than shipping "*" and hoping.
+    resolved_cors_origins = (
+        cors_origins
+        if cors_origins is not None
+        else ["http://localhost:5173", "http://127.0.0.1:5173"]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins
-        or ["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=resolved_cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    router = create_life_router(db_path or os.environ.get("OPENJARVIS_LIFE_DB", ""))
+    router = create_life_router(
+        db_path or configured_database_target()
+    )
     app.include_router(router)
     app.state.life_context = getattr(router, "life_context", None)
+
+    resolved_engine = engine
+    if resolved_engine is None and any(
+        os.environ.get(key) for key in _CLOUD_API_KEY_ENV_VARS
+    ):
+        try:
+            from openjarvis.engine.cloud import CloudEngine
+
+            resolved_engine = CloudEngine()
+        except Exception:  # noqa: BLE001 - the data-only fallback must stay online
+            logger.exception("Jarvis AI engine initialization failed; using data mode")
+
+    if resolved_engine is not None:
+        app.state.engine = resolved_engine
+        app.state.config = SimpleNamespace(
+            model=model
+            or os.environ.get("OPENJARVIS_LIFE_MODEL", "gpt-5-mini").strip()
+            or "gpt-5-mini"
+        )
 
     @app.get("/health")
     async def health() -> dict:
@@ -99,7 +131,12 @@ def create_life_app(
     return app
 
 
-app = create_life_app()
+_RUNNING_ON_VERCEL = bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"))
+app = create_life_app(
+    db_path=configured_database_target(),
+    cors_origins=[] if _RUNNING_ON_VERCEL else None,
+    serve_static=not _RUNNING_ON_VERCEL,
+)
 
 
 def main() -> None:

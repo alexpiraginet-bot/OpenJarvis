@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 import pytest
@@ -162,11 +163,68 @@ def test_pay_bill_weekly_and_yearly_recurrence(life, user):
 
 def test_pay_bill_twice_is_rejected(life, user):
     bill = life.store.insert(
-        "bills", user.id, {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-01"}
+        "bills",
+        user.id,
+        {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-01"},
     )
     life.service.pay_bill(user.id, bill)
     with pytest.raises(LifeServiceError):
         life.service.pay_bill(user.id, bill)
+
+
+def test_concurrent_bill_payment_books_one_expense(life, user):
+    account = life.store.insert(
+        "accounts", user.id, {"name": "Nubank", "balance_cents": 50000}
+    )
+    bill = life.store.insert(
+        "bills", user.id, {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-01"}
+    )
+
+    def pay():
+        try:
+            life.service.pay_bill(user.id, bill, account_id=account)
+            return "paid"
+        except LifeServiceError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: pay(), range(2)))
+
+    assert sorted(outcomes) == ["paid", "rejected"]
+    assert life.store.count("transactions", user.id) == 1
+    assert life.store.get("accounts", user.id, account)["balance_cents"] == 40100
+
+
+def test_pay_bill_rolls_back_every_change_when_recurrence_creation_fails(
+    life, user, monkeypatch
+):
+    account = life.store.insert(
+        "accounts", user.id, {"name": "Nubank", "balance_cents": 50000}
+    )
+    bill = life.store.insert(
+        "bills",
+        user.id,
+        {
+            "name": "Net",
+            "amount_cents": 9900,
+            "due_on": "2026-08-07",
+            "recurrence": "monthly",
+        },
+    )
+    original_insert = life.store.insert
+
+    def fail_next_bill(table, user_id, data):
+        if table == "bills":
+            raise RuntimeError("simulated recurring bill failure")
+        return original_insert(table, user_id, data)
+
+    monkeypatch.setattr(life.store, "insert", fail_next_bill)
+    with pytest.raises(RuntimeError, match="simulated"):
+        life.service.pay_bill(user.id, bill, account_id=account)
+
+    assert life.store.get("bills", user.id, bill)["status"] == "pending"
+    assert life.store.get("accounts", user.id, account)["balance_cents"] == 50000
+    assert life.store.count("transactions", user.id) == 0
 
 
 def test_pay_bill_of_another_tenant_is_not_found(life, user, other_user):
@@ -320,6 +378,23 @@ def test_check_in_is_idempotent(life, user):
     second = life.service.check_in_habit(user.id, habit, done_on="2026-08-10")
     assert first["created"] is True
     assert second["created"] is False
+
+
+def test_concurrent_check_in_creates_one_row(life, user):
+    habit = life.store.insert("habits", user.id, {"name": "Ler"})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda _: life.service.check_in_habit(
+                    user.id, habit, done_on="2026-08-10"
+                ),
+                range(2),
+            )
+        )
+
+    assert sorted(result["created"] for result in results) == [False, True]
+    assert life.store.count("habit_checkins", user.id) == 1
     assert life.store.count("habit_checkins", user.id) == 1
 
 

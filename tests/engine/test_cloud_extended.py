@@ -175,6 +175,26 @@ class TestCloudAnthropic:
         )
         assert result["content"] == "I am Sonnet 4.6"
 
+    def test_claude_sonnet_5_omits_sampling_temperature(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine = _make_cloud_engine(monkeypatch)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.return_value = _fake_anthropic_response(
+            content="I am Sonnet 5", model="claude-sonnet-5"
+        )
+        engine._anthropic_client = fake_client
+
+        result = engine.generate(
+            [Message(role=Role.USER, content="Hi")],
+            model="claude-sonnet-5",
+            temperature=0.7,
+        )
+
+        assert result["content"] == "I am Sonnet 5"
+        sent = fake_client.messages.create.call_args.kwargs
+        assert "temperature" not in sent
+
     def test_claude_haiku_4_5_generate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         engine = _make_cloud_engine(monkeypatch)
         fake_client = mock.MagicMock()
@@ -197,6 +217,10 @@ class TestCloudAnthropic:
         cost = estimate_cost("claude-sonnet-4-6", 1_000_000, 1_000_000)
         assert cost == pytest.approx(18.00)
 
+        # Use Sonnet 5's standard price as the conservative budget ceiling.
+        cost = estimate_cost("claude-sonnet-5", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(18.00)
+
         # claude-haiku-4-5: $1.00/M in, $5.00/M out
         cost = estimate_cost("claude-haiku-4-5", 1_000_000, 1_000_000)
         assert cost == pytest.approx(6.00)
@@ -204,6 +228,7 @@ class TestCloudAnthropic:
     def test_anthropic_routing(self) -> None:
         assert _is_anthropic_model("claude-opus-4-6") is True
         assert _is_anthropic_model("claude-sonnet-4-6") is True
+        assert _is_anthropic_model("claude-sonnet-5") is True
         assert _is_anthropic_model("claude-haiku-4-5") is True
         assert _is_anthropic_model("gpt-5-mini") is False
         assert _is_anthropic_model("gemini-3-pro") is False
@@ -634,6 +659,7 @@ class TestPricingTable:
             "gpt-5-mini",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
+            "claude-sonnet-5",
             "claude-haiku-4-5",
             "gemini-2.5-pro",
             "gemini-2.5-flash",

@@ -2,14 +2,23 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "runtime": "python3.12",
       "memory": 512,
       "maxDuration": 30
     }
   },
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/vida",
+      "permanent": false
+    }
+  ],
   "rewrites": [
-    { "source": "/v1/life/(.*)", "destination": "/api/index" },
-    { "source": "/health", "destination": "/api/index" },
+    {
+      "source": "/v1/life/:path*",
+      "destination": "/api/index/v1/life/:path*"
+    },
+    { "source": "/health", "destination": "/api/index/health" },
     { "source": "/vida/(.*)", "destination": "/index.html" },
     { "source": "/vida", "destination": "/index.html" }
   ],

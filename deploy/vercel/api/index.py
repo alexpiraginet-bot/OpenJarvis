@@ -14,17 +14,14 @@ import time rather than letting that ship.
 
 from __future__ import annotations
 
-import os
+from openjarvis.life.db import POSTGRES, configured_database_target, detect_backend
 
-from openjarvis.life.db import POSTGRES, detect_backend
-from openjarvis.life.server import create_life_app
-
-_DSN = os.environ.get("OPENJARVIS_LIFE_DB", "")
+_DSN = configured_database_target()
 
 if not _DSN:
     raise RuntimeError(
-        "OPENJARVIS_LIFE_DB is not set. The Life API needs a PostgreSQL DSN on "
-        "Vercel — set it in the project's environment variables."
+        "No PostgreSQL DSN is configured. Set OPENJARVIS_LIFE_DB or connect a "
+        "Vercel Postgres integration that provides POSTGRES_PRISMA_URL."
     )
 
 if detect_backend(_DSN) != POSTGRES:
@@ -35,7 +32,28 @@ if detect_backend(_DSN) != POSTGRES:
         "logged out by the next request."
     )
 
-# `serve_static=False`: Vercel's CDN serves the PWA from public/, and only
-# /v1/life is rewritten to this function. Same-origin in production, so no CORS
-# origins are opened — add one only if a separate frontend host appears.
-app = create_life_app(db_path=_DSN, cors_origins=[], serve_static=False)
+# Import only after validating the environment. The standalone module detects
+# Vercel and creates exactly one ASGI app with this PostgreSQL DSN, no CORS
+# origins, and no Python static-file handler.
+from openjarvis.life.server import app as life_app  # noqa: E402
+
+
+class _StripVercelFunctionPrefix:
+    """Restore the public path after Vercel's internal framework rewrite."""
+
+    _PREFIX = "/api/index"
+
+    def __init__(self, wrapped_app):
+        self._wrapped_app = wrapped_app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if path == self._PREFIX or path.startswith(f"{self._PREFIX}/"):
+            scope = dict(scope)
+            public_path = path[len(self._PREFIX) :] or "/"
+            scope["path"] = public_path
+            scope["raw_path"] = public_path.encode("utf-8")
+        await self._wrapped_app(scope, receive, send)
+
+
+app = _StripVercelFunctionPrefix(life_app)

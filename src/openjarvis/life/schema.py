@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Dict, Tuple
 if TYPE_CHECKING:
     from openjarvis.life.db import Database
 
+CURRENT_SCHEMA_VERSION = 1
+
 
 @dataclass(frozen=True, slots=True)
 class TableSpec:
@@ -42,6 +44,13 @@ class TableSpec:
 
 
 # -- Identity ---------------------------------------------------------------
+
+_DDL_SCHEMA_MIGRATIONS = """\
+CREATE TABLE IF NOT EXISTS life_schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+"""
 
 _DDL_USERS = """\
 CREATE TABLE IF NOT EXISTS users (
@@ -304,7 +313,42 @@ CREATE TABLE IF NOT EXISTS work_tasks (
 );
 """
 
+# Internal control-plane state is deliberately absent from SCHEMA so generic
+# CRUD and model-supplied table names can never mutate approvals.
+_DDL_JARVIS_ACTION_PROPOSALS = """\
+CREATE TABLE IF NOT EXISTS jarvis_action_proposals (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT NOT NULL,
+    tool_name           TEXT NOT NULL,
+    arguments_json      TEXT NOT NULL,
+    summary             TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    result_json         TEXT,
+    error               TEXT NOT NULL DEFAULT '',
+    confirmation_method TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL,
+    expires_at           TEXT NOT NULL,
+    resolved_at          TEXT
+);
+"""
+
+_DDL_JARVIS_AI_COST_EVENTS = """\
+CREATE TABLE IF NOT EXISTS jarvis_ai_cost_events (
+    id                 TEXT PRIMARY KEY,
+    user_id            TEXT NOT NULL,
+    month              TEXT NOT NULL,
+    model              TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    reserved_microusd  INTEGER NOT NULL,
+    actual_microusd    INTEGER NOT NULL DEFAULT 0,
+    created_at         TEXT NOT NULL,
+    expires_at         TEXT NOT NULL,
+    resolved_at        TEXT
+);
+"""
+
 _ALL_DDL = (
+    _DDL_SCHEMA_MIGRATIONS,
     _DDL_USERS,
     _DDL_TOKENS,
     _DDL_LOGIN_ATTEMPTS,
@@ -323,6 +367,8 @@ _ALL_DDL = (
     _DDL_FAMILY_EVENTS,
     _DDL_PROJECTS,
     _DDL_WORK_TASKS,
+    _DDL_JARVIS_ACTION_PROPOSALS,
+    _DDL_JARVIS_AI_COST_EVENTS,
 )
 
 # Every index leads with user_id: the tenant predicate is present in *every*
@@ -352,6 +398,10 @@ _INDEXES = (
     " ON family_events (user_id, event_on);",
     "CREATE INDEX IF NOT EXISTS idx_projects_user ON projects (user_id);",
     "CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON work_tasks (user_id, due_on);",
+    "CREATE INDEX IF NOT EXISTS idx_jarvis_actions_user_status"
+    " ON jarvis_action_proposals (user_id, status, created_at);",
+    "CREATE INDEX IF NOT EXISTS idx_jarvis_cost_month_status"
+    " ON jarvis_ai_cost_events (month, status, expires_at);",
 )
 
 
@@ -469,4 +519,70 @@ def ensure_schema(db: "Database") -> None:
     primary keys, which mean the same thing to SQLite and PostgreSQL. No
     AUTOINCREMENT, no SERIAL — so one definition serves both backends.
     """
+    sqlite_version = 0
+    if db.backend == "sqlite":
+        row = db.execute("PRAGMA user_version").fetchone()
+        sqlite_version = int(row[0]) if row else 0
+        if sqlite_version > CURRENT_SCHEMA_VERSION:
+            raise RuntimeError(
+                "Life database schema is newer than this OpenJarvis build: "
+                f"{sqlite_version} > {CURRENT_SCHEMA_VERSION}"
+            )
+    elif db.backend == "postgres":
+        migration_table = db.execute(
+            "SELECT to_regclass('public.life_schema_migrations') AS table_name"
+        ).fetchone()
+        if migration_table and migration_table["table_name"]:
+            row = db.execute(
+                "SELECT COALESCE(MAX(version), 0) AS version"
+                " FROM life_schema_migrations"
+            ).fetchone()
+            postgres_version = int(row["version"]) if row else 0
+            if postgres_version > CURRENT_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Life database schema is newer than this OpenJarvis build: "
+                    f"{postgres_version} > {CURRENT_SCHEMA_VERSION}"
+                )
+            if postgres_version == CURRENT_SCHEMA_VERSION:
+                return
+
     db.executescript([*_ALL_DDL, *_INDEXES])
+    if db.backend == "postgres":
+        # Supabase exposes ``public`` through its Data API. Life uses its own
+        # bearer-token API, so those roles must never read or mutate the raw
+        # tables directly. Generic PostgreSQL installs may not define the
+        # Supabase roles; in that case there is nothing to revoke.
+        role_rows = db.execute(
+            "SELECT rolname FROM pg_roles"
+            " WHERE rolname IN ('anon', 'authenticated')"
+        ).fetchall()
+        roles = tuple(str(row["rolname"]) for row in role_rows)
+        protected_tables = (
+            "life_schema_migrations",
+            "users",
+            "auth_tokens",
+            "login_attempts",
+            "notifications",
+            *SCHEMA,
+            "jarvis_action_proposals",
+            "jarvis_ai_cost_events",
+        )
+        security_statements = []
+        for table in protected_tables:
+            security_statements.append(
+                f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY'
+            )
+            security_statements.extend(
+                f'REVOKE ALL ON TABLE "{table}" FROM "{role}"' for role in roles
+            )
+        db.executescript(security_statements)
+        db.execute(
+            "INSERT INTO life_schema_migrations (version, applied_at)"
+            " VALUES (?, CAST(CURRENT_TIMESTAMP AS TEXT))"
+            " ON CONFLICT(version) DO NOTHING",
+            (CURRENT_SCHEMA_VERSION,),
+        )
+        db.commit()
+    if db.backend == "sqlite" and sqlite_version < CURRENT_SCHEMA_VERSION:
+        db.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        db.commit()

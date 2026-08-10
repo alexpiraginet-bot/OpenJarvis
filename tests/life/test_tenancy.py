@@ -82,6 +82,18 @@ def test_revoke_all_tokens_logs_out_every_device(life, user):
     assert all(life.users.resolve_token(t) is None for t in tokens)
 
 
+def test_user_write_does_not_commit_enclosing_life_transaction(life, user):
+    token = ""
+    with pytest.raises(RuntimeError, match="rollback requested"):
+        with life.store.transaction():
+            life.store.insert("accounts", user.id, {"name": "Temporary"})
+            token = life.users.issue_token(user.id, label="inside-transaction")
+            raise RuntimeError("rollback requested")
+
+    assert life.store.count("accounts", user.id) == 0
+    assert life.users.resolve_token(token) is None
+
+
 def test_expired_token_is_rejected_and_purged(life, user):
     """An expired token must not authenticate, and must not linger as a row."""
     token = life.users.issue_token(user.id)

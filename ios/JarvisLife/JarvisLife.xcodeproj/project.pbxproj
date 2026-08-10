@@ -1,0 +1,489 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		07988EAC498CE31CCEEBD1A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6315400FB64C7A664C784D0E /* Assets.xcassets */; };
+		23330791202DD576A5109A24 /* JarvisConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A7F8021D4BDDA015186F18 /* JarvisConfiguration.swift */; };
+		282FDA30C2F8ADCFAC958481 /* NativeSpeechController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD967DCB4035BCA31E028165 /* NativeSpeechController.swift */; };
+		35AC38A1E1FE03DA6128D774 /* JarvisConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9962B3BC06F8DA5B053AFC42 /* JarvisConfigurationTests.swift */; };
+		3E7E108966F04E526DB5B8C7 /* JarvisLifeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CABA8EC1643D580C9AC23235 /* JarvisLifeApp.swift */; };
+		4A1B2C3D4E5F60718293A4B5 /* BiometricLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2C3D4E5F60718293A4B5C6 /* BiometricLock.swift */; };
+		D3789929B55F392B27A32018 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8E0106A30DAD6267E8974A7A /* Foundation.framework */; };
+		D53861BA629D10F3E1C8F7E9 /* JarvisWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 326C7919D600E49ECBFFF305 /* JarvisWebView.swift */; };
+		D6282F4B73AA5D487C8B2BBD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206B8EC5321FEE2B2AE913BC /* ContentView.swift */; };
+		F1BEE014F00817BD463C8568 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8E0106A30DAD6267E8974A7A /* Foundation.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		1C7FDDB59FD129164C5D3F69 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BF95938A72D6140CAF4C1458 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 066DBAFB05C0EFC25D0FDEB3;
+			remoteInfo = JarvisLife;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		06DBE3B7BFB87B0D8A1FCA5D /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		206B8EC5321FEE2B2AE913BC /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		326C7919D600E49ECBFFF305 /* JarvisWebView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JarvisWebView.swift; sourceTree = "<group>"; };
+		4D381D7D029E02B6392FD94F /* JarvisLifeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JarvisLifeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5B2C3D4E5F60718293A4B5C6 /* BiometricLock.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BiometricLock.swift; sourceTree = "<group>"; };
+		6315400FB64C7A664C784D0E /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		8E0106A30DAD6267E8974A7A /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		9962B3BC06F8DA5B053AFC42 /* JarvisConfigurationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JarvisConfigurationTests.swift; sourceTree = "<group>"; };
+		A0A7F8021D4BDDA015186F18 /* JarvisConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JarvisConfiguration.swift; sourceTree = "<group>"; };
+		B53B37995BC6AD620ACA0840 /* JarvisLife.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JarvisLife.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CABA8EC1643D580C9AC23235 /* JarvisLifeApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JarvisLifeApp.swift; sourceTree = "<group>"; };
+		FD967DCB4035BCA31E028165 /* NativeSpeechController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeSpeechController.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		49E90B674BDB9761198456AF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D3789929B55F392B27A32018 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		54AEEBF60787EF342B27B770 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1BEE014F00817BD463C8568 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		186EED6513FB7E6F5DECB107 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B53B37995BC6AD620ACA0840 /* JarvisLife.app */,
+				4D381D7D029E02B6392FD94F /* JarvisLifeTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		1AEEAD9D670023AD57A98C24 /* JarvisLifeTests */ = {
+			isa = PBXGroup;
+			children = (
+				9962B3BC06F8DA5B053AFC42 /* JarvisConfigurationTests.swift */,
+			);
+			name = JarvisLifeTests;
+			path = JarvisLifeTests;
+			sourceTree = "<group>";
+		};
+		37421C5A61465C2F32ABDB45 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				8E0106A30DAD6267E8974A7A /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		48084E3B71C7303A43E2321B /* JarvisLife */ = {
+			isa = PBXGroup;
+			children = (
+				CABA8EC1643D580C9AC23235 /* JarvisLifeApp.swift */,
+				A0A7F8021D4BDDA015186F18 /* JarvisConfiguration.swift */,
+				5B2C3D4E5F60718293A4B5C6 /* BiometricLock.swift */,
+				206B8EC5321FEE2B2AE913BC /* ContentView.swift */,
+				326C7919D600E49ECBFFF305 /* JarvisWebView.swift */,
+				FD967DCB4035BCA31E028165 /* NativeSpeechController.swift */,
+				6315400FB64C7A664C784D0E /* Assets.xcassets */,
+				06DBE3B7BFB87B0D8A1FCA5D /* Info.plist */,
+			);
+			name = JarvisLife;
+			path = JarvisLife;
+			sourceTree = "<group>";
+		};
+		49B5F7B7A821BEC221FB0B50 = {
+			isa = PBXGroup;
+			children = (
+				186EED6513FB7E6F5DECB107 /* Products */,
+				9D343D11A76475115DD7A63E /* Frameworks */,
+				48084E3B71C7303A43E2321B /* JarvisLife */,
+				1AEEAD9D670023AD57A98C24 /* JarvisLifeTests */,
+			);
+			sourceTree = "<group>";
+		};
+		9D343D11A76475115DD7A63E /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				37421C5A61465C2F32ABDB45 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		066DBAFB05C0EFC25D0FDEB3 /* JarvisLife */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9F8A306148A14B90CB82A7B2 /* Build configuration list for PBXNativeTarget "JarvisLife" */;
+			buildPhases = (
+				E5856E0F9A768A347A339B1B /* Sources */,
+				54AEEBF60787EF342B27B770 /* Frameworks */,
+				83352374AC2C4FE3F1B87A1E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = JarvisLife;
+			productName = JarvisLife;
+			productReference = B53B37995BC6AD620ACA0840 /* JarvisLife.app */;
+			productType = "com.apple.product-type.application";
+		};
+		99AB3CCABBFC0C9FABB8D4F7 /* JarvisLifeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA4494DB3581689A55F13B7A /* Build configuration list for PBXNativeTarget "JarvisLifeTests" */;
+			buildPhases = (
+				8FA8FD7CE9E7A6A35A8E6CEF /* Sources */,
+				49E90B674BDB9761198456AF /* Frameworks */,
+				5851830B7D2A77776FC59819 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EA4A030F68A5042BA6733F22 /* PBXTargetDependency */,
+			);
+			name = JarvisLifeTests;
+			productName = JarvisLifeTests;
+			productReference = 4D381D7D029E02B6392FD94F /* JarvisLifeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BF95938A72D6140CAF4C1458 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = 156AD4DB717BF56E2090E59C /* Build configuration list for PBXProject "JarvisLife" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 49B5F7B7A821BEC221FB0B50;
+			minimizedProjectReferenceProxies = 0;
+			preferredProjectObjectVersion = 100;
+			productRefGroup = 186EED6513FB7E6F5DECB107 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				066DBAFB05C0EFC25D0FDEB3 /* JarvisLife */,
+				99AB3CCABBFC0C9FABB8D4F7 /* JarvisLifeTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		5851830B7D2A77776FC59819 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		83352374AC2C4FE3F1B87A1E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				07988EAC498CE31CCEEBD1A8 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		8FA8FD7CE9E7A6A35A8E6CEF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				35AC38A1E1FE03DA6128D774 /* JarvisConfigurationTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5856E0F9A768A347A339B1B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3E7E108966F04E526DB5B8C7 /* JarvisLifeApp.swift in Sources */,
+				23330791202DD576A5109A24 /* JarvisConfiguration.swift in Sources */,
+				4A1B2C3D4E5F60718293A4B5 /* BiometricLock.swift in Sources */,
+				D6282F4B73AA5D487C8B2BBD /* ContentView.swift in Sources */,
+				D53861BA629D10F3E1C8F7E9 /* JarvisWebView.swift in Sources */,
+				282FDA30C2F8ADCFAC958481 /* NativeSpeechController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		EA4A030F68A5042BA6733F22 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = JarvisLife;
+			target = 066DBAFB05C0EFC25D0FDEB3 /* JarvisLife */;
+			targetProxy = 1C7FDDB59FD129164C5D3F69 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		07A5B033057692DA49FEF636 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = NP9X453K55;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lextechnology.jarvislife.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/JarvisLife.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/JarvisLife";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		11E8C05B7C66E364A2A55DE7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = NP9X453K55;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JarvisLife/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				JARVIS_APP_URL = "https://jarvis-life.vercel.app/vida";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lextechnology.jarvislife;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		234E5812B815D83DBCBDCA89 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		40902E8D771543B93B761521 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5A78EDB4E54E5E9F7962D2AA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = NP9X453K55;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JarvisLife/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				JARVIS_APP_URL = "http://127.0.0.1:8100/vida";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lextechnology.jarvislife;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B1BAC87599B4519D04B5CCA5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = NP9X453K55;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lextechnology.jarvislife.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/JarvisLife.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/JarvisLife";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		156AD4DB717BF56E2090E59C /* Build configuration list for PBXProject "JarvisLife" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				40902E8D771543B93B761521 /* Debug */,
+				234E5812B815D83DBCBDCA89 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9F8A306148A14B90CB82A7B2 /* Build configuration list for PBXNativeTarget "JarvisLife" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				11E8C05B7C66E364A2A55DE7 /* Release */,
+				5A78EDB4E54E5E9F7962D2AA /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA4494DB3581689A55F13B7A /* Build configuration list for PBXNativeTarget "JarvisLifeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				07A5B033057692DA49FEF636 /* Release */,
+				B1BAC87599B4519D04B5CCA5 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = BF95938A72D6140CAF4C1458 /* Project object */;
+}

@@ -13,8 +13,10 @@ from openjarvis.life.db import (
     POSTGRES,
     SQLITE,
     Database,
+    configured_database_target,
     connect,
     detect_backend,
+    normalize_postgres_dsn,
     translate,
 )
 
@@ -36,6 +38,38 @@ def test_dsns_are_recognised_as_postgres(target):
 @pytest.mark.parametrize("target", ["/tmp/life.db", "life.db", "./data/life.db", ""])
 def test_paths_are_recognised_as_sqlite(target):
     assert detect_backend(target) == SQLITE
+
+
+def test_serverless_database_target_prefers_transaction_pooler(monkeypatch):
+    monkeypatch.delenv("OPENJARVIS_LIFE_DB", raising=False)
+    monkeypatch.setenv("POSTGRES_URL", "postgres://direct.example/postgres")
+    monkeypatch.setenv(
+        "POSTGRES_PRISMA_URL", "postgres://transaction-pooler.example/postgres"
+    )
+
+    assert configured_database_target() == (
+        "postgres://transaction-pooler.example/postgres"
+    )
+
+
+def test_explicit_database_target_overrides_provider_urls(monkeypatch):
+    monkeypatch.setenv("OPENJARVIS_LIFE_DB", "postgres://explicit.example/postgres")
+    monkeypatch.setenv(
+        "POSTGRES_PRISMA_URL", "postgres://transaction-pooler.example/postgres"
+    )
+
+    assert configured_database_target() == "postgres://explicit.example/postgres"
+
+
+def test_normalize_postgres_dsn_removes_provider_metadata():
+    dsn = (
+        "postgres://user:secret@pooler.example:6543/postgres"
+        "?sslmode=require&supa=base-pooler.x&pgbouncer=true"
+    )
+
+    assert normalize_postgres_dsn(dsn) == (
+        "postgres://user:secret@pooler.example:6543/postgres?sslmode=require"
+    )
 
 
 # -- Placeholder translation -------------------------------------------------

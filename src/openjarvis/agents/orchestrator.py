@@ -223,6 +223,7 @@ class OrchestratorAgent(ToolUsingAgent):
         turns = 0
         total_prompt_tokens = 0
         total_completion_tokens = 0
+        total_cost_usd = 0.0
 
         for _turn in range(self._max_turns):
             turns += 1
@@ -241,6 +242,7 @@ class OrchestratorAgent(ToolUsingAgent):
             usage = result.get("usage", {})
             total_prompt_tokens += usage.get("prompt_tokens", 0)
             total_completion_tokens += usage.get("completion_tokens", 0)
+            total_cost_usd += float(result.get("cost_usd", 0.0) or 0.0)
 
             content = result.get("content", "")
             raw_tool_calls = result.get("tool_calls", [])
@@ -258,6 +260,7 @@ class OrchestratorAgent(ToolUsingAgent):
                         "prompt_tokens": total_prompt_tokens,
                         "completion_tokens": total_completion_tokens,
                         "total_tokens": total_prompt_tokens + total_completion_tokens,
+                        "cost_usd": total_cost_usd,
                     },
                 )
 

@@ -139,23 +139,24 @@ class LifeService:
         if kind not in ("income", "expense"):
             raise LifeServiceError("kind must be 'income' or 'expense'")
 
-        record_id = self._store.insert(
-            "transactions",
-            user_id,
-            {
-                "amount_cents": int(amount_cents),
-                "kind": kind,
-                "category": category or "outros",
-                "description": description,
-                "occurred_on": occurred_on or date.today().isoformat(),
-                "account_id": account_id,
-                "source": source,
-            },
-        )
-        if account_id:
-            delta = amount_cents if kind == "income" else -amount_cents
-            self._adjust_balance(user_id, account_id, delta)
-        return self._store.get("transactions", user_id, record_id) or {}
+        with self._store.transaction():
+            record_id = self._store.insert(
+                "transactions",
+                user_id,
+                {
+                    "amount_cents": int(amount_cents),
+                    "kind": kind,
+                    "category": category or "outros",
+                    "description": description,
+                    "occurred_on": occurred_on or date.today().isoformat(),
+                    "account_id": account_id,
+                    "source": source,
+                },
+            )
+            if account_id:
+                delta = amount_cents if kind == "income" else -amount_cents
+                self._adjust_balance(user_id, account_id, delta)
+            return self._store.get("transactions", user_id, record_id) or {}
 
     def _adjust_balance(self, user_id: str, account_id: str, delta: int) -> None:
         """Apply a signed delta to an account balance, if the account exists."""
@@ -177,57 +178,57 @@ class LifeService:
         Returns the updated bill plus the ids it produced, so the client can
         show "pago — próxima em 12/09" without a second round trip.
         """
-        bill = self._store.get("bills", user_id, bill_id)
-        if bill is None:
-            raise LifeServiceError(f"Bill not found: {bill_id}")
-        if bill["status"] == "paid":
-            raise LifeServiceError("Bill is already paid")
-
-        when = paid_on or date.today().isoformat()
-        self._store.update(
-            "bills", user_id, bill_id, {"status": "paid", "paid_on": when}
-        )
-        transaction = self.add_transaction(
-            user_id,
-            amount_cents=int(bill["amount_cents"]),
-            kind="expense",
-            category=bill["category"],
-            description=f"Pagamento: {bill['name']}",
-            occurred_on=when,
-            account_id=account_id,
-            source="bill",
-        )
-
-        next_bill_id = ""
-        recurrence = bill["recurrence"]
-        due = _parse_date(bill["due_on"])
-        if recurrence != "none" and due is not None:
-            if recurrence == "weekly":
-                next_due = due + timedelta(days=7)
-            elif recurrence == "monthly":
-                next_due = add_months(due, 1)
-            elif recurrence == "yearly":
-                next_due = add_months(due, 12)
-            else:
-                raise LifeServiceError(f"Unknown recurrence: {recurrence}")
-            next_bill_id = self._store.insert(
-                "bills",
-                user_id,
-                {
-                    "name": bill["name"],
-                    "amount_cents": bill["amount_cents"],
-                    "due_on": next_due.isoformat(),
-                    "recurrence": recurrence,
-                    "status": "pending",
-                    "category": bill["category"],
-                    "autopay": bill["autopay"],
-                },
+        with self._store.transaction():
+            bill = self._store.get("bills", user_id, bill_id)
+            if bill is None:
+                raise LifeServiceError(f"Bill not found: {bill_id}")
+            if bill["status"] == "paid":
+                raise LifeServiceError("Bill is already paid")
+            when = paid_on or date.today().isoformat()
+            self._store.update(
+                "bills", user_id, bill_id, {"status": "paid", "paid_on": when}
             )
-        return {
-            "bill": self._store.get("bills", user_id, bill_id),
-            "transaction_id": transaction.get("id", ""),
-            "next_bill_id": next_bill_id,
-        }
+            transaction = self.add_transaction(
+                user_id,
+                amount_cents=int(bill["amount_cents"]),
+                kind="expense",
+                category=bill["category"],
+                description=f"Pagamento: {bill['name']}",
+                occurred_on=when,
+                account_id=account_id,
+                source="bill",
+            )
+
+            next_bill_id = ""
+            recurrence = bill["recurrence"]
+            due = _parse_date(bill["due_on"])
+            if recurrence != "none" and due is not None:
+                if recurrence == "weekly":
+                    next_due = due + timedelta(days=7)
+                elif recurrence == "monthly":
+                    next_due = add_months(due, 1)
+                elif recurrence == "yearly":
+                    next_due = add_months(due, 12)
+                else:
+                    raise LifeServiceError(f"Unknown recurrence: {recurrence}")
+                next_bill_id = self._store.insert(
+                    "bills",
+                    user_id,
+                    {
+                        "name": bill["name"],
+                        "amount_cents": bill["amount_cents"],
+                        "due_on": next_due.isoformat(),
+                        "recurrence": recurrence,
+                        "status": "pending",
+                        "category": bill["category"],
+                        "autopay": bill["autopay"],
+                    },
+                )
+            return {
+                "bill": self._store.get("bills", user_id, bill_id),
+                "transaction_id": transaction.get("id", ""),
+                "next_bill_id": next_bill_id,
+            }
 
     def finance_summary(
         self, user_id: str, *, anchor: Optional[date] = None
@@ -301,18 +302,21 @@ class LifeService:
         Status is stored rather than derived so the scheduler can alert on a
         transition instead of recomputing "is it late?" on every read.
         """
-        stale = self._store.list_records(
-            "bills",
-            user_id,
-            filters=(
-                Filter("status", "=", "pending"),
-                Filter("due_on", "<", today.isoformat()),
-            ),
-            limit=500,
-        )
-        for bill in stale:
-            self._store.update("bills", user_id, bill["id"], {"status": "overdue"})
-        return len(stale)
+        with self._store.transaction():
+            stale = self._store.list_records(
+                "bills",
+                user_id,
+                filters=(
+                    Filter("status", "=", "pending"),
+                    Filter("due_on", "<", today.isoformat()),
+                ),
+                limit=500,
+            )
+            for bill in stale:
+                self._store.update(
+                    "bills", user_id, bill["id"], {"status": "overdue"}
+                )
+            return len(stale)
 
     # == Fitness =============================================================
 
@@ -408,30 +412,31 @@ class LifeService:
         self, user_id: str, habit_id: str, *, done_on: str = "", note: str = ""
     ) -> Dict[str, Any]:
         """Mark a habit done for a day. Idempotent — repeats never double-count."""
-        habit = self._store.get("habits", user_id, habit_id)
-        if habit is None:
-            raise LifeServiceError(f"Habit not found: {habit_id}")
-        when = done_on or date.today().isoformat()
-        existing = self._store.list_records(
-            "habit_checkins",
-            user_id,
-            filters=(
-                Filter("habit_id", "=", habit_id),
-                Filter("done_on", "=", when),
-            ),
-            limit=1,
-        )
-        if existing:
-            return {"checkin": existing[0], "created": False}
-        record_id = self._store.insert(
-            "habit_checkins",
-            user_id,
-            {"habit_id": habit_id, "done_on": when, "note": note},
-        )
-        return {
-            "checkin": self._store.get("habit_checkins", user_id, record_id),
-            "created": True,
-        }
+        with self._store.transaction():
+            habit = self._store.get("habits", user_id, habit_id)
+            if habit is None:
+                raise LifeServiceError(f"Habit not found: {habit_id}")
+            when = done_on or date.today().isoformat()
+            existing = self._store.list_records(
+                "habit_checkins",
+                user_id,
+                filters=(
+                    Filter("habit_id", "=", habit_id),
+                    Filter("done_on", "=", when),
+                ),
+                limit=1,
+            )
+            if existing:
+                return {"checkin": existing[0], "created": False}
+            record_id = self._store.insert(
+                "habit_checkins",
+                user_id,
+                {"habit_id": habit_id, "done_on": when, "note": note},
+            )
+            return {
+                "checkin": self._store.get("habit_checkins", user_id, record_id),
+                "created": True,
+            }
 
     def undo_habit_check_in(
         self, user_id: str, habit_id: str, *, done_on: str = ""

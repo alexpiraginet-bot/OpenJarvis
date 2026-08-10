@@ -6,12 +6,14 @@
  */
 
 import {
+  Activity,
   Briefcase,
+  BrainCircuit,
+  ChevronRight,
   Dumbbell,
   Heart,
   LogOut,
   Repeat,
-  Sparkles,
   Wallet,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
@@ -36,8 +38,16 @@ const LABELS: Record<AppId, string> = {
 
 const ORDER: AppId[] = ['finance', 'fitness', 'routine', 'family', 'work'];
 
-/** How many alerts the widget shows before it stops being a glance. */
-const WIDGET_ALERT_LIMIT = 4;
+const SPECIALISTS: Record<AppId, string> = {
+  finance: 'Diretor financeiro',
+  fitness: 'Coach de performance',
+  routine: 'Chefe de gabinete',
+  family: 'Concierge familiar',
+  work: 'Assistente executivo',
+};
+
+/** How many alerts stay visible below the orbital system. */
+const WIDGET_ALERT_LIMIT = 2;
 
 export function Springboard({
   today,
@@ -60,109 +70,154 @@ export function Springboard({
 
   const alerts = today?.alerts ?? [];
   const visible = alerts.slice(0, WIDGET_ALERT_LIMIT);
+  const pendingTotal = today
+    ? Object.values(today.badges).reduce((total, count) => total + count, 0)
+    : 0;
 
   return (
-    <>
-      <div className="oj-scroll">
-        <div className="oj-home">
-          <header className="oj-home-head">
-            <div>
-              <h1 className="oj-greeting">{today?.greeting ?? `Olá, ${userName}`}</h1>
-              <div className="oj-date">
-                {today ? formatLongDate(today.date) : ''}
-              </div>
-            </div>
-            <button
-              type="button"
-              className="oj-hud-btn"
-              onClick={onLogout}
-              aria-label="Sair da conta"
-            >
-              <LogOut size={18} />
-            </button>
-          </header>
+    <div className="oj-scroll oj-home-scroll">
+      <main className="oj-home">
+        <header className="oj-home-head">
+          <div>
+            <span className="oj-home-kicker">
+              <span className="oj-system-led" /> Jarvis Life / sistema ativo
+            </span>
+            <h1 className="oj-greeting">{today?.greeting ?? `Olá, ${userName}`}</h1>
+            <div className="oj-date">{today ? formatLongDate(today.date) : ''}</div>
+          </div>
+          <button
+            type="button"
+            className="oj-hud-btn"
+            onClick={onLogout}
+            aria-label="Sair da conta"
+          >
+            <LogOut size={18} />
+          </button>
+        </header>
 
-          {error && <div className="oj-error">{error}</div>}
+        {error && <div className="oj-error">{error}</div>}
 
-          <section className="oj-widget" aria-label="Resumo de hoje">
-            <div className="oj-widget-title">
-              <span>Hoje</span>
-              {alerts.length > WIDGET_ALERT_LIMIT && (
-                <span>+{alerts.length - WIDGET_ALERT_LIMIT}</span>
-              )}
-            </div>
+        <section className="oj-system-strip" aria-label="Estado do sistema">
+          <div className="oj-system-metric">
+            <span>PENDÊNCIAS</span>
+            <strong>{pendingTotal}</strong>
+          </div>
+          <div className="oj-system-metric">
+            <span>ESPECIALISTAS</span>
+            <strong>05</strong>
+          </div>
+          <div className="oj-system-metric oj-system-metric--online">
+            <span>NÚCLEO</span>
+            <strong><Activity size={14} /> ATIVO</strong>
+          </div>
+        </section>
 
-            {visible.length === 0 ? (
-              <Empty>Tudo em dia. Nada precisa de você agora.</Empty>
-            ) : (
-              visible.map((alert) => (
-                <button
-                  key={`${alert.app}-${alert.record_id}-${alert.title}`}
-                  type="button"
-                  className="oj-alert"
-                  onClick={() => onOpenApp(alert.app)}
-                >
-                  <span className={`oj-dot oj-dot--${alert.severity}`} />
-                  <span className="oj-alert-body">
-                    <span className="oj-alert-title">{alert.title}</span>
-                    <span className="oj-alert-detail">{alert.detail}</span>
-                  </span>
-                  {alert.amount_cents > 0 && (
-                    <span className="oj-alert-amount">
-                      {formatMoney(alert.amount_cents, today?.currency)}
-                    </span>
+        <nav className="oj-orbit" aria-label="Aplicativos conectados ao Jarvis">
+          <span className="oj-orbit-track oj-orbit-track--outer" aria-hidden="true" />
+          <span className="oj-orbit-track oj-orbit-track--inner" aria-hidden="true" />
+
+          <button
+            type="button"
+            className="oj-orbit-core"
+            onClick={onAskJarvis}
+            aria-label="Conversar com o Jarvis"
+          >
+            <img src="/aether-neural-core.png" alt="" />
+              <span className="oj-orbit-core-label">
+                <strong>JARVIS</strong>
+                <small>NEURAL CORE</small>
+              </span>
+          </button>
+
+          {ORDER.map((app) => {
+            const Icon = ICONS[app];
+            const badge = today?.badges?.[app] ?? 0;
+            return (
+              <button
+                key={app}
+                type="button"
+                className={`oj-orbit-app oj-orbit-app--${app}`}
+                onClick={() => onOpenApp(app)}
+                aria-label={
+                  badge > 0
+                    ? `${LABELS[app]}, ${badge} pendência(s)`
+                    : LABELS[app]
+                }
+              >
+                <span className="oj-orbit-node">
+                  <Icon size={24} />
+                  {badge > 0 && (
+                    <span className="oj-badge">{badge > 99 ? '99+' : badge}</span>
                   )}
-                </button>
-              ))
-            )}
-          </section>
+                </span>
+                <span className="oj-orbit-label">{LABELS[app]}</span>
+                <span className="oj-orbit-role">{SPECIALISTS[app]}</span>
+              </button>
+            );
+          })}
+        </nav>
 
-          <nav className="oj-grid" aria-label="Aplicativos">
+        <section className="oj-specialist-panel" aria-label="Conselho de especialistas">
+          <div className="oj-panel-heading">
+            <span><BrainCircuit size={15} /> Conselho Jarvis</span>
+            <small>5 agentes conectados</small>
+          </div>
+          <div className="oj-specialist-list">
             {ORDER.map((app) => {
               const Icon = ICONS[app];
-              const badge = today?.badges?.[app] ?? 0;
               return (
                 <button
-                  key={app}
+                  key={`specialist-${app}`}
                   type="button"
-                  className="oj-app"
+                  className="oj-specialist-row"
                   onClick={() => onOpenApp(app)}
-                  aria-label={
-                    badge > 0
-                      ? `${LABELS[app]}, ${badge} pendência(s)`
-                      : LABELS[app]
-                  }
                 >
-                  <span className={`oj-icon oj-icon--${app}`}>
-                    <Icon size={30} color="#fff" />
-                    {badge > 0 && (
-                      <span className="oj-badge">{badge > 99 ? '99+' : badge}</span>
-                    )}
+                  <span className="oj-specialist-icon"><Icon size={17} /></span>
+                  <span>
+                    <strong>{SPECIALISTS[app]}</strong>
+                    <small>{LABELS[app]}</small>
                   </span>
-                  <span className="oj-app-label">{LABELS[app]}</span>
+                  <span className="oj-specialist-status">IA</span>
+                  <ChevronRight size={15} />
                 </button>
               );
             })}
+          </div>
+        </section>
 
-            <button
-              type="button"
-              className="oj-app"
-              onClick={onAskJarvis}
-              aria-label="Conversar com o Jarvis"
-            >
-              <span className="oj-icon oj-icon--jarvis">
-                <Sparkles size={30} color="#fff" />
-              </span>
-              <span className="oj-app-label">Jarvis</span>
-            </button>
-          </nav>
-        </div>
-      </div>
+        <section className="oj-widget" aria-label="Resumo de hoje">
+          <div className="oj-widget-title">
+            <span>Sinais de hoje</span>
+            {alerts.length > WIDGET_ALERT_LIMIT && (
+              <span>+{alerts.length - WIDGET_ALERT_LIMIT}</span>
+            )}
+          </div>
 
-      <button type="button" className="oj-dock" onClick={onAskJarvis}>
-        <Sparkles size={18} />
-        <span>Perguntar ao Jarvis…</span>
-      </button>
-    </>
+          {visible.length === 0 ? (
+            <Empty>Tudo em dia. Nada precisa de você agora.</Empty>
+          ) : (
+            visible.map((alert) => (
+              <button
+                key={`${alert.app}-${alert.record_id}-${alert.title}`}
+                type="button"
+                className="oj-alert"
+                onClick={() => onOpenApp(alert.app)}
+              >
+                <span className={`oj-dot oj-dot--${alert.severity}`} />
+                <span className="oj-alert-body">
+                  <span className="oj-alert-title">{alert.title}</span>
+                  <span className="oj-alert-detail">{alert.detail}</span>
+                </span>
+                {alert.amount_cents > 0 && (
+                  <span className="oj-alert-amount">
+                    {formatMoney(alert.amount_cents, today?.currency)}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </section>
+      </main>
+    </div>
   );
 }

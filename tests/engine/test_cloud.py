@@ -32,6 +32,10 @@ class TestEstimateCost:
         cost = estimate_cost("gpt-4o-2024-01-01", 1_000_000, 0)
         assert cost == pytest.approx(2.50)
 
+    def test_prefix_match_uses_the_most_specific_model(self) -> None:
+        cost = estimate_cost("gpt-5.4-2026-08-01", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(75.0)
+
 
 class TestCloudEngineHealth:
     def test_health_no_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:

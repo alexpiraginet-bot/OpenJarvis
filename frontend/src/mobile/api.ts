@@ -131,10 +131,49 @@ export interface AskResult {
   /** `model` when an engine answered, `data` when built from the records. */
   source: 'model' | 'data';
   context: Today;
+  proposals?: JarvisActionProposal[];
+  usage?: Record<string, number | boolean>;
+  budget?: AiBudgetSnapshot;
+}
+
+export interface AiBudgetSnapshot {
+  month: string;
+  cap_microusd: number;
+  spent_microusd: number;
+  reserved_microusd: number;
+  remaining_microusd: number;
+}
+
+export interface JarvisActionProposal {
+  id: string;
+  tool_name: 'life_record' | 'life_complete';
+  summary: string;
+  status: 'pending' | 'confirmed' | 'canceled' | 'failed' | 'expired';
+  arguments: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  created_at: string;
+  expires_at: string;
 }
 
 /** Ask the assistant a question grounded in this client's own life data. */
 export const ask = (question: string) => post<AskResult>('/ask', { question });
+
+export const listPendingActions = () =>
+  get<{ count: number; proposals: JarvisActionProposal[] }>('/actions/pending');
+
+export type ConfirmationMethod = 'explicit' | 'voice_explicit';
+
+export const confirmAction = (
+  proposalId: string,
+  confirmationMethod: ConfirmationMethod = 'explicit',
+) =>
+  post<{ proposal: JarvisActionProposal; replayed: boolean }>(
+    `/actions/${proposalId}/confirm`,
+    { confirmed: true, confirmation_method: confirmationMethod },
+  );
+
+export const cancelAction = (proposalId: string) =>
+  post<{ proposal: JarvisActionProposal }>(`/actions/${proposalId}/cancel`);
 
 // -- Home -------------------------------------------------------------------
 

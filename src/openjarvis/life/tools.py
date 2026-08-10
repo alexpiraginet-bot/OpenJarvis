@@ -55,6 +55,15 @@ _DATE_DEFAULTS = {
     "family_event": "event_on",
 }
 
+# Fields maintained by multi-step domain actions. Generic record creation must
+# not bypass ledger entries, completion stamps or other side effects.
+_ACTION_OWNED_RECORD_FIELDS = {
+    "account": frozenset({"balance_cents"}),
+    "bill": frozenset({"status", "paid_on"}),
+    "workout": frozenset({"completed_at"}),
+    "task": frozenset({"status", "done_at"}),
+}
+
 
 class LifeUserError(RuntimeError):
     """Raised when a tool cannot determine which client it is acting for."""
@@ -94,6 +103,36 @@ def _apply_date_default(kind: str, fields: Dict[str, Any]) -> Dict[str, Any]:
     if column and not fields.get(column):
         fields[column] = date.today().isoformat()
     return fields
+
+
+def normalize_life_record_fields(kind: str, fields: Any) -> Dict[str, Any]:
+    """Validate tool-call fields and normalize canonical integer money input."""
+    if kind not in _RECORD_TABLES:
+        raise ValueError(f"Unknown kind: {kind}")
+    if not isinstance(fields, dict):
+        raise ValueError("fields must be an object")
+
+    normalized = dict(fields)
+    protected = _ACTION_OWNED_RECORD_FIELDS.get(kind, frozenset())
+    bypassed = sorted(protected.intersection(normalized))
+    if bypassed:
+        raise ValueError("Fields require a domain action: " + ", ".join(bypassed))
+
+    if "amount_cents" in normalized:
+        amount = normalized["amount_cents"]
+        if isinstance(amount, bool):
+            raise ValueError("amount_cents must be an integer")
+        if isinstance(amount, str):
+            candidate = amount.strip()
+            digits = candidate[1:] if candidate[:1] in {"+", "-"} else candidate
+            if not digits.isdigit():
+                raise ValueError("amount_cents must be an integer")
+            amount = int(candidate)
+        elif not isinstance(amount, int):
+            raise ValueError("amount_cents must be an integer")
+        normalized["amount_cents"] = amount
+
+    return normalized
 
 
 class _LifeTool(BaseTool):
@@ -257,7 +296,6 @@ class LifeRecordTool(_LifeTool):
         """Create the record and report it back in human terms."""
         life = self._context()
         kind = params.get("kind", "")
-        fields = dict(params.get("fields") or {})
         table = _RECORD_TABLES.get(kind)
         if table is None:
             return ToolResult(
@@ -271,10 +309,11 @@ class LifeRecordTool(_LifeTool):
             return ToolResult(tool_name="life_record", success=False, content=str(exc))
 
         try:
+            fields = normalize_life_record_fields(kind, params.get("fields"))
             if kind in ("expense", "income"):
                 record = life.service.add_transaction(
                     user.id,
-                    amount_cents=int(fields.get("amount_cents", 0)),
+                    amount_cents=fields.get("amount_cents", 0),
                     kind=kind,
                     category=fields.get("category", "outros"),
                     description=fields.get("description", ""),

@@ -76,30 +76,40 @@ def test_register_rejects_duplicate_email(client, auth):
     assert response.status_code == 400
 
 
-def test_registration_is_closed_by_default_after_the_first_client(
+def test_registration_is_closed_by_default_even_on_an_empty_database(
     tmp_path, monkeypatch
 ):
     """A hosted server must not let strangers create accounts.
 
-    The first account is exempt so a fresh deployment can be bootstrapped
-    without shell access; every one after it requires opting in.
+    Bootstrap must be explicitly enabled; the first remote visitor must never
+    be able to claim ownership of a fresh deployment.
     """
     monkeypatch.delenv("OPENJARVIS_LIFE_OPEN_SIGNUP", raising=False)
     app = FastAPI()
     router = create_life_router(str(tmp_path / "life.db"))
     app.include_router(router)
     with TestClient(app) as test_client:
-        first = test_client.post(
+        response = test_client.post(
             "/v1/life/auth/register",
             json={"email": "dono@exemplo.com", "password": "senha-forte-123"},
         )
-        second = test_client.post(
-            "/v1/life/auth/register",
-            json={"email": "intruso@exemplo.com", "password": "senha-forte-123"},
-        )
-    assert first.status_code == 201
-    assert second.status_code == 403
+    assert response.status_code == 403
     router.life_context.close()
+
+
+def test_registration_is_rate_limited(client):
+    for _ in range(5):
+        response = client.post(
+            "/v1/life/auth/register",
+            json={"email": "brute@exemplo.com", "password": "curta"},
+        )
+        assert response.status_code == 400
+    blocked = client.post(
+        "/v1/life/auth/register",
+        json={"email": "brute@exemplo.com", "password": "curta"},
+    )
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"] == "60"
 
 
 def test_login_returns_a_token(client, auth):
@@ -223,6 +233,8 @@ def test_the_throttle_does_not_reveal_which_emails_exist(client, auth):
         ("get", "/v1/life/today"),
         ("get", "/v1/life/apps"),
         ("get", "/v1/life/summary/finance"),
+        ("get", "/v1/life/ai-budget"),
+        ("get", "/v1/life/actions/pending"),
         ("get", "/v1/life/records/accounts"),
         ("post", "/v1/life/records/accounts"),
     ],
@@ -322,6 +334,78 @@ def test_patch_and_delete_a_record(client, auth):
     )
 
 
+def test_transaction_creation_updates_account_atomically(client, auth):
+    account = client.post(
+        "/v1/life/records/accounts",
+        headers=auth,
+        json={"fields": {"name": "Nubank", "balance_cents": 10000}},
+    ).json()["record"]["id"]
+    created = client.post(
+        "/v1/life/records/transactions",
+        headers=auth,
+        json={
+            "fields": {
+                "amount_cents": 1500,
+                "kind": "expense",
+                "account_id": account,
+                "occurred_on": "2026-08-10",
+            }
+        },
+    )
+    balance = client.get(
+        f"/v1/life/records/accounts/{account}", headers=auth
+    ).json()["record"]["balance_cents"]
+    assert created.status_code == 201
+    assert created.json()["record"]["source"] == "manual"
+    assert balance == 8500
+
+
+def test_generic_crud_cannot_bypass_finance_actions(client, auth):
+    account = client.post(
+        "/v1/life/records/accounts",
+        headers=auth,
+        json={"fields": {"name": "Nubank", "balance_cents": 10000}},
+    ).json()["record"]["id"]
+    bill = client.post(
+        "/v1/life/records/bills",
+        headers=auth,
+        json={"fields": {"name": "Luz", "amount_cents": 1000, "due_on": "2026-08-10"}},
+    ).json()["record"]["id"]
+    transaction = client.post(
+        "/v1/life/records/transactions",
+        headers=auth,
+        json={"fields": {"amount_cents": 100, "occurred_on": "2026-08-10"}},
+    ).json()["record"]["id"]
+
+    assert (
+        client.patch(
+            f"/v1/life/records/accounts/{account}",
+            headers=auth,
+            json={"fields": {"balance_cents": 999999}},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.patch(
+            f"/v1/life/records/bills/{bill}",
+            headers=auth,
+            json={"fields": {"status": "paid"}},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.delete(
+            f"/v1/life/records/transactions/{transaction}", headers=auth
+        ).status_code
+        == 409
+    )
+    assert (
+        client.get(f"/v1/life/records/accounts/{account}", headers=auth)
+        .json()["record"]["balance_cents"]
+        == 10000
+    )
+
+
 def test_list_filters_by_equality_and_comparison(client, auth):
     for name, due in (("Luz", "2026-08-01"), ("Net", "2026-08-20")):
         client.post(
@@ -399,6 +483,26 @@ def test_apps_manifest_lists_every_springboard_icon(client, auth):
         "family",
         "work",
     }
+
+
+def test_ai_budget_starts_with_the_ten_dollar_cap(client, auth):
+    body = client.get("/v1/life/ai-budget", headers=auth).json()
+    assert body["cap_microusd"] == 10_000_000
+    assert body["spent_microusd"] == 0
+    assert body["remaining_microusd"] == 10_000_000
+
+
+def test_ask_is_rate_limited_per_authenticated_user(client, auth):
+    for _ in range(30):
+        response = client.post(
+            "/v1/life/ask", headers=auth, json={"question": "Meu resumo"}
+        )
+        assert response.status_code == 200
+    blocked = client.post(
+        "/v1/life/ask", headers=auth, json={"question": "Mais uma"}
+    )
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"] == "60"
 
 
 def test_today_reflects_stored_data(client, auth):
@@ -614,6 +718,92 @@ def test_ask_degrades_to_data_when_the_engine_fails(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["source"] == "data"
+    router.life_context.close()
+
+
+def test_ask_proposes_a_write_and_confirmation_executes_it_once(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENJARVIS_LIFE_OPEN_SIGNUP", "1")
+
+    class ActionEngine:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                assert any(
+                    "nunca o mande preencher uma tela" in message.content
+                    for message in messages
+                )
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "name": "life_record",
+                            "arguments": (
+                                '{"kind":"expense","fields":'
+                                '{"amount_cents":4590,"category":"mercado"}}'
+                            ),
+                        }
+                    ],
+                }
+            return {"content": "Confirme para registrar.", "usage": {}}
+
+    app = FastAPI()
+    router = create_life_router(str(tmp_path / "life.db"))
+    app.include_router(router)
+    app.state.engine = ActionEngine()
+
+    with TestClient(app) as test_client:
+        token = test_client.post(
+            "/v1/life/auth/register",
+            json={"email": "acao@exemplo.com", "password": "senha-forte-123"},
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        asked = test_client.post(
+            "/v1/life/ask",
+            headers=headers,
+            json={"question": "Gastei 45,90 no mercado"},
+        )
+        proposal = asked.json()["proposals"][0]
+        before = test_client.get(
+            "/v1/life/records/transactions", headers=headers
+        ).json()["count"]
+        missing_consent = test_client.post(
+            f"/v1/life/actions/{proposal['id']}/confirm",
+            headers=headers,
+            json={"confirmed": False},
+        )
+        fake_biometric = test_client.post(
+            f"/v1/life/actions/{proposal['id']}/confirm",
+            headers=headers,
+            json={"confirmed": True, "confirmation_method": "face_id"},
+        )
+        first = test_client.post(
+            f"/v1/life/actions/{proposal['id']}/confirm",
+            headers=headers,
+            json={"confirmed": True, "confirmation_method": "voice_explicit"},
+        ).json()
+        second = test_client.post(
+            f"/v1/life/actions/{proposal['id']}/confirm",
+            headers=headers,
+            json={"confirmed": True, "confirmation_method": "explicit"},
+        ).json()
+        after = test_client.get(
+            "/v1/life/records/transactions", headers=headers
+        ).json()["count"]
+
+    assert asked.status_code == 200
+    assert before == 0
+    assert missing_consent.status_code == 400
+    assert fake_biometric.status_code == 422
+    assert first["replayed"] is False
+    assert first["proposal"]["confirmation_method"] == "voice_explicit"
+    assert second["replayed"] is True
+    assert after == 1
     router.life_context.close()
 
 

@@ -140,7 +140,8 @@ class UserStore:
         """
         self._owns_db = db is None
         self._db = db if db is not None else connect(str(db_path) or None)
-        ensure_schema(self._db)
+        if self._owns_db:
+            ensure_schema(self._db)
 
     @property
     def connection(self) -> Database:

@@ -1,6 +1,6 @@
 /** Entrada do cliente — login ou primeiro acesso. */
 
-import { Sparkles } from 'lucide-react';
+import { BrainCircuit, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import { login, register } from './api';
 import type { LifeUser } from './types';
@@ -36,9 +36,14 @@ export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
 
   return (
     <div className="oj-login">
-      <div className="oj-login-mark">
-        <Sparkles size={32} color="#fff" />
+      <div className="oj-login-system">
+        <span className="oj-system-led" />
+        SECURE PERSONAL SYSTEM
       </div>
+      <div className="oj-login-mark">
+        <BrainCircuit size={34} />
+      </div>
+      <div className="oj-login-code">JARVIS LIFE / IDENTITY GATE</div>
       <h1 className="oj-login-title">
         {mode === 'login' ? 'Bem-vindo de volta' : 'Sua vida, na palma da mão'}
       </h1>
@@ -47,6 +52,12 @@ export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
           ? 'Entre para falar com o seu Jarvis.'
           : 'Finanças, treino, rotina, família e trabalho — em um só lugar, com um assistente que conhece tudo isso.'}
       </p>
+
+      <div className="oj-login-capabilities" aria-label="Capacidades do sistema">
+        <span>5 especialistas IA</span>
+        <span>voz nativa</span>
+        <span><ShieldCheck size={12} /> dados protegidos</span>
+      </div>
 
       {error && <div className="oj-error">{error}</div>}
 

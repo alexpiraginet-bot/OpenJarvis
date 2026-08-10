@@ -23,11 +23,16 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 OUT="$ROOT/deploy/vercel/.build"
 
+if [[ -z "$OUT" || "$OUT" != "$ROOT/deploy/vercel/.build" || "$OUT" == "$ROOT" || "$OUT" == "/" ]]; then
+  echo "Refusing to clean unexpected Vercel build directory: $OUT" >&2
+  exit 1
+fi
+
 echo "==> Building the PWA"
 ( cd frontend && npm install --silent && npm run build )
 
 echo "==> Assembling $OUT"
-rm -rf "$OUT"
+rm -rf -- "$OUT"
 mkdir -p "$OUT/api" "$OUT/public"
 
 # The PWA. Vite writes it into the Python package's static/ directory; on
@@ -41,30 +46,39 @@ cp "$ROOT/deploy/vercel/requirements.txt" "$OUT/requirements.txt"
 # Vendor the package, minus anything the function never imports. The static
 # bundle is already in public/, and the node bridges are for channels the Life
 # API does not use — copying them would blow past the function size limit for
-# no benefit. Plain cp + prune rather than rsync, which is not present on every
-# build image.
-cp -R "$ROOT/src/openjarvis" "$OUT/openjarvis"
-rm -rf \
-  "$OUT/openjarvis/server/static" \
-  "$OUT/openjarvis/agents/claude_code_runner" \
-  "$OUT/openjarvis/channels/whatsapp_baileys_bridge"
-find "$OUT/openjarvis" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-find "$OUT/openjarvis" -name '*.pyc' -delete 2>/dev/null || true
+# no benefit. Stream the tree through tar so generated Python caches are never
+# copied in the first place. Copying then pruning those tiny files is slow on
+# macOS and can fail with fcopyfile timeouts.
+(
+  cd "$ROOT/src"
+  tar \
+    --exclude='openjarvis/server/static' \
+    --exclude='openjarvis/agents/claude_code_runner' \
+    --exclude='openjarvis/channels/whatsapp_baileys_bridge' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    -cf - openjarvis
+) | (
+  cd "$OUT"
+  tar -xf -
+)
 
 echo "==> Verifying the vendored tree imports on its own"
 # Catches a module pruned by mistake *before* a deploy does, by importing with
 # only the build directory on the path. Prefer the project venv — the system
 # python3 has no fastapi, and a check that silently skips is worthless.
 if command -v uv >/dev/null 2>&1; then
-  PY=(uv run --project "$ROOT" python)
+  PY=(uv run --extra life-postgres --extra inference-cloud --project "$ROOT" python)
 else
   PY=(python3)
 fi
-( cd "$OUT" && PYTHONPATH="$OUT" OPENJARVIS_LIFE_DB="postgres://u:p@h/d" \
+( cd "$OUT" && PYTHONPATH="$OUT" OPENJARVIS_LIFE_DB=":memory:" \
     "${PY[@]}" -c "
 import sys
 # Drop the repo's own src/ so the vendored copy is what actually gets loaded.
 sys.path = [p for p in sys.path if 'OpenJarvis/src' not in p]
+import anthropic
+import psycopg
 import openjarvis.life.server
 import openjarvis.server.life_routes
 assert openjarvis.__file__.startswith('$OUT'), (
@@ -72,6 +86,11 @@ assert openjarvis.__file__.startswith('$OUT'), (
 )
 print('  vendored openjarvis imports cleanly:', openjarvis.__file__)
 " )
+
+# The import check above creates interpreter caches in the deployment tree.
+# They are not runtime inputs, so keep the upload deterministic and compact.
+find "$OUT" -type f -name '*.pyc' -delete
+find "$OUT" -depth -type d -name '__pycache__' -empty -delete
 
 SIZE="$(du -sh "$OUT" | cut -f1)"
 echo

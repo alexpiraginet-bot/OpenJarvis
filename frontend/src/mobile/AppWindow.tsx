@@ -7,7 +7,7 @@
  * another destination.
  */
 
-import { ChevronLeft } from 'lucide-react';
+import { BrainCircuit, ChevronLeft } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 export interface Tab {
@@ -18,16 +18,20 @@ export interface Tab {
 
 export function AppWindow({
   title,
+  specialist,
   tabs,
   activeTab,
   onTabChange,
   onClose,
+  onAskJarvis,
 }: {
   title: string;
+  specialist: string;
   tabs: Tab[];
   activeTab: string;
   onTabChange: (id: string) => void;
   onClose: () => void;
+  onAskJarvis: () => void;
 }) {
   const current = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
 
@@ -38,7 +42,19 @@ export function AppWindow({
           <ChevronLeft size={22} />
           <span>Início</span>
         </button>
-        <div className="oj-window-title">{title}</div>
+        <div className="oj-window-identity">
+          <div className="oj-window-title">{title}</div>
+          <div className="oj-window-specialist">{specialist}</div>
+        </div>
+        <button
+          type="button"
+          className="oj-window-ai"
+          onClick={onAskJarvis}
+          aria-label={`Falar com ${specialist}`}
+        >
+          <BrainCircuit size={17} />
+          <span>IA</span>
+        </button>
       </div>
 
       {tabs.length > 1 && (

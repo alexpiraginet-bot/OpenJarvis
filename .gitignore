@@ -133,3 +133,4 @@ oj-debug.*.json
 
 # Assembled Vercel deployment directory (built by scripts/build-vercel.sh)
 deploy/vercel/.build/
+.vercel

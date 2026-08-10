@@ -24,14 +24,22 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from openjarvis.life import LifeContext, open_life
+from openjarvis.life.ai_budget import AiBudgetExceededError, AiBudgetStore
+from openjarvis.life.jarvis import (
+    JarvisActionError,
+    JarvisActionStore,
+    JarvisRuntime,
+)
 from openjarvis.life.money import format_money as _money
 from openjarvis.life.schema import APPS, SCHEMA
 from openjarvis.life.service import LifeServiceError, today_in
@@ -49,6 +57,16 @@ _OP_SUFFIXES = {
     "__lt": "<",
     "__ne": "!=",
     "__like": "LIKE",
+}
+
+# Fields maintained by multi-step domain actions. Generic PATCH must not
+# bypass their side effects (ledger entries, streaks and completion stamps).
+_ACTION_OWNED_PATCH_FIELDS = {
+    "accounts": frozenset({"balance_cents"}),
+    "bills": frozenset({"status", "paid_on"}),
+    "workouts": frozenset({"completed_at"}),
+    "work_tasks": frozenset({"status", "done_at"}),
+    "transactions": frozenset(SCHEMA["transactions"].columns),
 }
 
 #: Springboard metadata. The client renders icons and labels from this so
@@ -95,6 +113,80 @@ logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=False)
 
+_AUTH_WINDOW_SECONDS = 60.0
+_AUTH_IP_LIMIT = 20
+_AUTH_IDENTITY_LIMIT = 5
+_ASK_WINDOW_SECONDS = 60.0
+_ASK_USER_LIMIT = 30
+
+
+class _AuthRateLimiter:
+    """Small per-process guard against credential and signup brute force."""
+
+    def __init__(self) -> None:
+        self._events: Dict[str, List[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, ip: str, identity: str) -> bool:
+        now = time.monotonic()
+        buckets = (
+            (f"ip:{ip}", _AUTH_IP_LIMIT),
+            (f"identity:{ip}:{identity}", _AUTH_IDENTITY_LIMIT),
+        )
+        with self._lock:
+            if len(self._events) > 1024:
+                self._events = {
+                    key: active
+                    for key, events in self._events.items()
+                    if (
+                        active := [
+                            event
+                            for event in events
+                            if now - event < _AUTH_WINDOW_SECONDS
+                        ]
+                    )
+                }
+            for key, limit in buckets:
+                recent = [
+                    event
+                    for event in self._events.get(key, [])
+                    if now - event < _AUTH_WINDOW_SECONDS
+                ]
+                if len(recent) >= limit:
+                    self._events[key] = recent
+                    return False
+            for key, _ in buckets:
+                self._events.setdefault(key, []).append(now)
+        return True
+
+    def clear_identity(self, ip: str, identity: str) -> None:
+        """Reset one credential bucket after a successful authentication."""
+        with self._lock:
+            self._events.pop(f"identity:{ip}:{identity}", None)
+
+
+class _AskRateLimiter:
+    """Bound paid inference per authenticated user in one server process."""
+
+    def __init__(self) -> None:
+        self._events: Dict[str, List[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, user_id: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            recent = [
+                event
+                for event in self._events.get(user_id, [])
+                if now - event < _ASK_WINDOW_SECONDS
+            ]
+            if len(recent) >= _ASK_USER_LIMIT:
+                self._events[user_id] = recent
+                return False
+            recent.append(now)
+            self._events[user_id] = recent
+        return True
+
 
 # -- Request/response models -------------------------------------------------
 
@@ -140,6 +232,13 @@ class AskRequest(BaseModel):
     model: str = ""
 
 
+class ConfirmActionRequest(BaseModel):
+    """Explicit approval for a pending Jarvis write."""
+
+    confirmed: bool = False
+    confirmation_method: Literal["explicit", "voice_explicit"] = "explicit"
+
+
 class PayBillRequest(BaseModel):
     """Options when settling a bill."""
 
@@ -167,6 +266,25 @@ def create_life_router(db_path: str = "") -> APIRouter:
     """Build the Life API router, optionally against a specific database."""
     router = APIRouter(prefix="/v1/life", tags=["life"])
     life: LifeContext = open_life(db_path or None)
+    actions = JarvisActionStore(life)
+    ai_budget = AiBudgetStore(life)
+    auth_limiter = _AuthRateLimiter()
+    ask_limiter = _AskRateLimiter()
+
+    def guard_auth_attempt(request: Request, identity: str, scope: str) -> None:
+        ip = request.client.host if request.client else "unknown"
+        scoped_identity = f"{scope}:{identity.strip().lower()}"
+        if not auth_limiter.allow(ip, scoped_identity):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many authentication attempts",
+                headers={"Retry-After": str(int(_AUTH_WINDOW_SECONDS))},
+            )
+
+    def clear_auth_attempts(request: Request, identity: str, scope: str) -> None:
+        ip = request.client.host if request.client else "unknown"
+        scoped_identity = f"{scope}:{identity.strip().lower()}"
+        auth_limiter.clear_identity(ip, scoped_identity)
 
     def current_user(
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
@@ -185,15 +303,16 @@ def create_life_router(db_path: str = "") -> APIRouter:
     # -- Identity ------------------------------------------------------------
 
     @router.post("/auth/register", status_code=201)
-    async def register(body: RegisterRequest) -> Dict[str, Any]:
+    async def register(body: RegisterRequest, request: Request) -> Dict[str, Any]:
         """Create a client account and return a session token.
 
-        Open registration is off unless ``OPENJARVIS_LIFE_OPEN_SIGNUP=1``. The
-        sole exception is the very first account on an empty database, so a
-        fresh deployment can be bootstrapped without shell access.
+        Open registration is off unless ``OPENJARVIS_LIFE_OPEN_SIGNUP=1``.
+        Production bootstrap must therefore be an explicit operator decision,
+        never a race won by the first remote visitor.
         """
+        guard_auth_attempt(request, body.email, "register")
         open_signup = os.environ.get("OPENJARVIS_LIFE_OPEN_SIGNUP", "") == "1"
-        if not open_signup and life.users.count_users() > 0:
+        if not open_signup:
             raise HTTPException(
                 status_code=403, detail="Registration is closed on this server"
             )
@@ -212,13 +331,14 @@ def create_life_router(db_path: str = "") -> APIRouter:
         return {"token": token, "user": user.to_dict()}
 
     @router.post("/auth/login")
-    async def login(body: LoginRequest) -> Dict[str, Any]:
+    async def login(body: LoginRequest, request: Request) -> Dict[str, Any]:
         """Exchange email and password for a bearer token.
 
-        Throttled per address. The check runs *before* the password is
-        verified, and applies to unregistered addresses too — throttling only
-        real accounts would make the 429 itself a user-enumeration oracle.
+        Throttled both per process/IP and persistently per address. The checks
+        run before password verification and apply to unknown addresses too,
+        so the 429 response cannot become a user-enumeration oracle.
         """
+        guard_auth_attempt(request, body.email, "login")
         locked_for = life.users.seconds_until_unlocked(body.email)
         if locked_for > 0:
             raise HTTPException(
@@ -235,6 +355,7 @@ def create_life_router(db_path: str = "") -> APIRouter:
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         life.users.clear_login_failures(body.email)
+        clear_auth_attempts(request, body.email, "login")
         token = life.users.issue_token(user.id, label=body.device or "app")
         return {"token": token, "user": user.to_dict()}
 
@@ -309,18 +430,19 @@ def create_life_router(db_path: str = "") -> APIRouter:
     ) -> Dict[str, Any]:
         """Answer a question grounded in *this client's* life data.
 
-        The client's data is injected as context rather than left for the model
-        to fetch, because the voice screen needs one round trip: a tool-calling
-        loop would add seconds of silence to every spoken question.
-
-        When no inference engine is wired, this still answers — from the data
-        alone — and says so via ``source``. A voice assistant that goes mute
-        because the model is missing is worse than one that reads out the
-        numbers it already has.
+        The model receives tenant-bound read tools. Write tools persist pending
+        proposals and cannot mutate data until a later authenticated request
+        explicitly confirms one.
         """
         question = body.question.strip()
         if not question:
             raise HTTPException(status_code=400, detail="Empty question")
+        if not ask_limiter.allow(user.id):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many assistant requests",
+                headers={"Retry-After": str(int(_ASK_WINDOW_SECONDS))},
+            )
 
         briefing = _build_today(life, user)
         context = _life_context(briefing, user)
@@ -333,32 +455,29 @@ def create_life_router(db_path: str = "") -> APIRouter:
                 "context": briefing,
             }
 
-        from openjarvis.core.types import Message, Role
-
-        messages = [
-            Message(
-                role=Role.SYSTEM,
-                content=_ASK_SYSTEM_PROMPT.format(context=context),
-            ),
-            Message(role=Role.USER, content=question),
-        ]
         model = body.model or getattr(
             getattr(request.app.state, "config", None), "model", ""
         )
         try:
             from starlette.concurrency import run_in_threadpool
 
-            # engine.generate is blocking; off the event loop it goes, or one
-            # slow local model stalls every other request on this worker.
+            runtime = JarvisRuntime(life, user.id, engine, str(model) or "default")
             result = await run_in_threadpool(
-                lambda: engine.generate(
-                    messages,
-                    model=str(model) or "default",
-                    temperature=0.3,
-                    max_tokens=400,
-                )
+                runtime.run,
+                question,
+                _ASK_SYSTEM_PROMPT.format(context=context),
             )
-            answer = str(result.get("content", "")).strip()
+            answer = str(result["answer"]).strip()
+        except AiBudgetExceededError as exc:
+            logger.warning("Life ask budget gate: %s", exc)
+            return {
+                "answer": _fallback_answer(briefing, user),
+                "source": "data",
+                "degraded_reason": "monthly_ai_budget",
+                "budget": ai_budget.snapshot(),
+                "context": briefing,
+                "proposals": [],
+            }
         except Exception as exc:  # noqa: BLE001 — degrade, never 500 the mic
             logger.warning("Life ask failed, serving data answer: %s", exc)
             return {
@@ -371,7 +490,52 @@ def create_life_router(db_path: str = "") -> APIRouter:
             "answer": answer or _fallback_answer(briefing, user, question),
             "source": "model" if answer else "data",
             "context": briefing,
+            "proposals": result["proposals"],
+            "usage": result["usage"],
+            "budget": result["budget"],
         }
+
+    @router.get("/ai-budget")
+    async def ai_budget_status(user: User = Depends(current_user)) -> Dict[str, Any]:
+        """Return the global monthly remote-inference cap and accounted usage."""
+        return {"user_id": user.id, **ai_budget.snapshot()}
+
+    @router.get("/actions/pending")
+    async def pending_actions(user: User = Depends(current_user)) -> Dict[str, Any]:
+        """List this client's unexpired actions awaiting confirmation."""
+        pending = actions.list_pending(user.id)
+        return {"count": len(pending), "proposals": pending}
+
+    @router.post("/actions/{proposal_id}/confirm")
+    async def confirm_action(
+        proposal_id: str,
+        body: ConfirmActionRequest,
+        user: User = Depends(current_user),
+    ) -> Dict[str, Any]:
+        """Execute one pending action exactly once after explicit approval."""
+        if not body.confirmed:
+            raise HTTPException(
+                status_code=400, detail="Explicit confirmation required"
+            )
+        try:
+            return actions.confirm(
+                user.id,
+                proposal_id,
+                confirmation_method=body.confirmation_method,
+            )
+        except JarvisActionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/actions/{proposal_id}/cancel")
+    async def cancel_action(
+        proposal_id: str,
+        user: User = Depends(current_user),
+    ) -> Dict[str, Any]:
+        """Cancel one pending action without executing it."""
+        try:
+            return {"proposal": actions.cancel(user.id, proposal_id)}
+        except JarvisActionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # -- Generic CRUD --------------------------------------------------------
 
@@ -413,8 +577,21 @@ def create_life_router(db_path: str = "") -> APIRouter:
         """Create a row in ``table`` for the authenticated client."""
         _require_table(table)
         try:
+            if table == "transactions":
+                _require_known_fields(table, body.fields)
+                record = life.service.add_transaction(
+                    user.id,
+                    amount_cents=int(body.fields.get("amount_cents", 0)),
+                    kind=str(body.fields.get("kind", "expense")),
+                    category=str(body.fields.get("category", "outros")),
+                    description=str(body.fields.get("description", "")),
+                    occurred_on=str(body.fields.get("occurred_on", "")),
+                    account_id=str(body.fields.get("account_id", "")),
+                    source="manual",
+                )
+                return {"record": record}
             record_id = life.store.insert(table, user.id, body.fields)
-        except LifeStoreError as exc:
+        except (LifeServiceError, LifeStoreError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"record": life.store.get(table, user.id, record_id)}
 
@@ -438,6 +615,15 @@ def create_life_router(db_path: str = "") -> APIRouter:
     ) -> Dict[str, Any]:
         """Patch a row. 404 when it does not belong to this client."""
         _require_table(table)
+        protected = _ACTION_OWNED_PATCH_FIELDS.get(table, frozenset())
+        bypassed = sorted(protected.intersection(body.fields))
+        if bypassed:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Fields require a domain action: " + ", ".join(bypassed)
+                ),
+            )
         try:
             ok = life.store.update(table, user.id, record_id, body.fields)
         except LifeStoreError as exc:
@@ -452,6 +638,11 @@ def create_life_router(db_path: str = "") -> APIRouter:
     ) -> Dict[str, Any]:
         """Delete a row."""
         _require_table(table)
+        if table == "transactions":
+            raise HTTPException(
+                status_code=409,
+                detail="Transactions require a reversal action and cannot be deleted",
+            )
         if not life.store.delete(table, user.id, record_id):
             raise HTTPException(status_code=404, detail="Record not found")
         return {"deleted": record_id}
@@ -545,6 +736,15 @@ def _require_table(table: str) -> None:
     """Reject tables that are not part of the Life schema."""
     if table not in SCHEMA:
         raise HTTPException(status_code=404, detail=f"Unknown table: {table}")
+
+
+def _require_known_fields(table: str, fields: Dict[str, Any]) -> None:
+    """Validate fields before a domain service replaces generic insertion."""
+    unknown = sorted(set(fields).difference(SCHEMA[table].columns))
+    if unknown:
+        raise LifeStoreError(
+            f"Unknown column {unknown[0]!r} on table {table!r}"
+        )
 
 
 def _filters_from_query(params: Dict[str, str]) -> List[Filter]:
@@ -777,11 +977,23 @@ def _fallback_answer(briefing: Dict[str, Any], user: User, question: str = "") -
 
 
 _ASK_SYSTEM_PROMPT = (
-    "Você é o Jarvis, assistente pessoal deste cliente. Responda em português "
-    "do Brasil, em no máximo 3 frases curtas, em tom natural de fala — a "
-    "resposta será lida em voz alta. Use apenas os dados abaixo; se a resposta "
-    "não estiver neles, diga que não tem esse dado ainda. Nunca invente "
-    "valores.\n\nDADOS DO CLIENTE:\n{context}"
+    "Você é o Jarvis, a interface central de voz e o cérebro orquestrador "
+    "pessoal deste cliente. Você incorpora cinco especialistas: chefe de gabinete "
+    "para rotina e calendário, coach para treinos e hábitos, diretor financeiro "
+    "para orçamento e contas, assistente executivo para trabalho e projetos, e "
+    "organizador da vida familiar. Responda em português do Brasil, em no máximo "
+    "3 frases curtas e naturais, porque a resposta será lida em voz alta. "
+    "Quando o cliente pedir para criar, registrar, planejar, concluir ou organizar "
+    "algo, nunca o mande preencher uma tela: consulte os dados conhecidos e use as "
+    "ferramentas para preparar a ação. Se faltar um dado obrigatório, faça somente "
+    "uma pergunta objetiva por vez; assim que houver dados suficientes, prepare a "
+    "proposta sem pedir que ele repita a solicitação. Ferramentas de escrita criam "
+    "apenas propostas: descreva o que será feito, diga que aguarda confirmação por "
+    "voz ou botão e nunca afirme que já foi executado. Não efetue transferências "
+    "bancárias nem decisões médicas; registre, organize e recomende dentro dos "
+    "dados e ferramentas disponíveis. Se a resposta não estiver nos dados ou nas "
+    "ferramentas, diga que ainda não tem esse dado. Nunca invente valores.\n\n"
+    "DADOS DO CLIENTE:\n{context}"
 )
 
 

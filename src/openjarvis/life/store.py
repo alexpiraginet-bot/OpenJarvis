@@ -15,10 +15,11 @@ value is bound as a parameter.
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from openjarvis.life.db import Database, connect
 from openjarvis.life.schema import SCHEMA, TableSpec, ensure_schema
@@ -88,12 +89,25 @@ class LifeStore:
         """
         self._owns_db = db is None
         self._db = db if db is not None else connect(str(db_path) or None)
-        ensure_schema(self._db)
+        if self._owns_db:
+            ensure_schema(self._db)
 
     @property
     def connection(self) -> Database:
         """The underlying database, for stores sharing this connection."""
         return self._db
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Serialize a read sequence on the shared database connection."""
+        with self._db.locked():
+            yield
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Run a multi-step domain operation atomically on either backend."""
+        with self._db.transaction():
+            yield
 
     # -- Writes --------------------------------------------------------------
 

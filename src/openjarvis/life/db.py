@@ -30,14 +30,18 @@ What actually differs, and how each is handled:
 from __future__ import annotations
 
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Iterator, Optional, Sequence
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 SQLITE = "sqlite"
 POSTGRES = "postgres"
 
 #: URL schemes that mean "this is a PostgreSQL DSN, not a file path".
 _POSTGRES_SCHEMES = ("postgres://", "postgresql://", "postgresql+psycopg://")
+_NON_LIBPQ_QUERY_PARAMETERS = frozenset({"pgbouncer", "supa"})
 
 
 class DatabaseError(RuntimeError):
@@ -47,6 +51,42 @@ class DatabaseError(RuntimeError):
 def detect_backend(target: str) -> str:
     """Classify a connection target as a Postgres DSN or a SQLite path."""
     return POSTGRES if target.startswith(_POSTGRES_SCHEMES) else SQLITE
+
+
+def configured_database_target() -> str:
+    """Return the durable database configured for the current runtime.
+
+    Supabase exposes both direct/session and transaction-pooled URLs through
+    its Vercel integration. Serverless functions must prefer the transaction
+    pooler: concurrent cold starts otherwise consume one database session each
+    and direct IPv6 connectivity is not available from every runtime.
+    """
+    import os
+
+    return (
+        os.environ.get("OPENJARVIS_LIFE_DB")
+        or os.environ.get("POSTGRES_PRISMA_URL")
+        or os.environ.get("POSTGRES_URL", "")
+    )
+
+
+def normalize_postgres_dsn(dsn: str) -> str:
+    """Remove provider metadata that libpq/psycopg cannot parse.
+
+    Supabase's Vercel integration appends ``supa=...`` to its pooled URL and
+    its Prisma URL may append ``pgbouncer=true``. Both are hints for client
+    libraries, not PostgreSQL connection parameters; psycopg rejects them as
+    unknown. Every other URL component is preserved byte-for-byte.
+    """
+    parsed = urlsplit(dsn)
+    if not parsed.query:
+        return dsn
+    query_parts = [
+        part
+        for part in parsed.query.split("&")
+        if unquote_plus(part.partition("=")[0]) not in _NON_LIBPQ_QUERY_PARAMETERS
+    ]
+    return urlunsplit(parsed._replace(query="&".join(query_parts)))
 
 
 def translate(sql: str) -> str:
@@ -93,6 +133,8 @@ class Database:
         """Open ``target``: a Postgres DSN, or a filesystem path for SQLite."""
         self._target = target
         self._backend = detect_backend(target)
+        self._lock = threading.RLock()
+        self._transaction_depth = 0
         if self._backend == POSTGRES:
             self._conn = self._connect_postgres(target)
         else:
@@ -127,7 +169,15 @@ class Database:
             ) from exc
         # autocommit=False keeps explicit commit() meaningful, matching the
         # SQLite path so callers behave identically on both.
-        return psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+        return psycopg.connect(
+            normalize_postgres_dsn(dsn),
+            row_factory=dict_row,
+            autocommit=False,
+            connect_timeout=5,
+            # Supavisor transaction mode cannot rely on a server-side prepared
+            # statement surviving on the same backend connection.
+            prepare_threshold=None,
+        )
 
     # -- Properties ----------------------------------------------------------
 
@@ -143,42 +193,86 @@ class Database:
 
     # -- Queries -------------------------------------------------------------
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Serialize work that must keep one shared connection coherent."""
+        with self._lock:
+            yield
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Keep nested domain writes inside one atomic transaction."""
+        with self._lock:
+            outermost = self._transaction_depth == 0
+            if outermost and self._backend == SQLITE:
+                self._conn.execute("BEGIN IMMEDIATE")
+            self._transaction_depth += 1
+            try:
+                yield
+            except Exception:
+                self._transaction_depth -= 1
+                if outermost:
+                    self._conn.rollback()
+                raise
+            else:
+                self._transaction_depth -= 1
+                if outermost:
+                    self._conn.commit()
+
     def execute(self, sql: str, params: Sequence[Any] = ()) -> Any:
         """Run a statement and return a cursor.
 
         The cursor supports ``fetchone``, ``fetchall`` and ``rowcount`` on both
         backends, and rows are subscriptable by column name on both.
         """
-        if self._backend == POSTGRES:
-            cursor = self._conn.cursor()
-            cursor.execute(translate(sql), tuple(params))
-            return cursor
-        return self._conn.execute(sql, tuple(params))
+        with self._lock:
+            if self._backend == POSTGRES:
+                cursor = self._conn.cursor()
+                cursor.execute(translate(sql), tuple(params))
+                return cursor
+            return self._conn.execute(sql, tuple(params))
 
     def executemany(self, sql: str, seq: Iterable[Sequence[Any]]) -> Any:
         """Run a statement once per parameter tuple."""
         rows = [tuple(item) for item in seq]
         if not rows:
             return None
-        if self._backend == POSTGRES:
-            cursor = self._conn.cursor()
-            cursor.executemany(translate(sql), rows)
-            return cursor
-        return self._conn.executemany(sql, rows)
+        with self._lock:
+            if self._backend == POSTGRES:
+                cursor = self._conn.cursor()
+                cursor.executemany(translate(sql), rows)
+                return cursor
+            return self._conn.executemany(sql, rows)
 
     def executescript(self, statements: Iterable[str]) -> None:
         """Run a sequence of DDL statements, then commit."""
-        for statement in statements:
+        script = list(statements)
+        if not script:
+            return
+        if self._backend == POSTGRES:
+            # Each cold start may need dozens of idempotent schema statements.
+            # Pipeline them so a Vercel function in one region doesn't pay one
+            # full network round trip to Supabase in another for every table.
+            with self._lock, self._conn.pipeline():
+                for statement in script:
+                    cursor = self._conn.cursor()
+                    cursor.execute(translate(statement))
+                self._conn.commit()
+            return
+        for statement in script:
             self.execute(statement)
         self.commit()
 
     def commit(self) -> None:
         """Commit the open transaction."""
-        self._conn.commit()
+        with self._lock:
+            if self._transaction_depth == 0:
+                self._conn.commit()
 
     def rollback(self) -> None:
         """Discard the open transaction."""
-        self._conn.rollback()
+        with self._lock:
+            self._conn.rollback()
 
     def close(self) -> None:
         """Close the connection."""
@@ -193,9 +287,7 @@ def connect(target: Optional[str] = None) -> Database:
     under the OpenJarvis data directory — which is what makes `run-life.sh`
     and the test suite work with no configuration at all.
     """
-    import os
-
-    resolved = target or os.environ.get("OPENJARVIS_LIFE_DB", "")
+    resolved = target or configured_database_target()
     if not resolved:
         from openjarvis.core.paths import get_data_dir
 
@@ -208,7 +300,9 @@ __all__ = [
     "SQLITE",
     "Database",
     "DatabaseError",
+    "configured_database_target",
     "connect",
     "detect_backend",
+    "normalize_postgres_dsn",
     "translate",
 ]

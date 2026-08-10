@@ -35,6 +35,14 @@ const TITLES: Record<AppId, string> = {
   work: 'Trabalho',
 };
 
+const SPECIALISTS: Record<AppId, string> = {
+  finance: 'Diretor financeiro IA',
+  fitness: 'Coach de performance IA',
+  routine: 'Chefe de gabinete IA',
+  family: 'Concierge familiar IA',
+  work: 'Assistente executivo IA',
+};
+
 type Layer = 'jarvis' | 'springboard';
 
 export default function MobileApp() {
@@ -108,7 +116,7 @@ export default function MobileApp() {
 
   if (checking) {
     return (
-      <div className="oj-mobile">
+      <div className="oj-mobile" translate="no">
         <Spinner />
       </div>
     );
@@ -116,7 +124,7 @@ export default function MobileApp() {
 
   if (!user) {
     return (
-      <div className="oj-mobile">
+      <div className="oj-mobile" translate="no">
         <LoginScreen
           onAuth={(authenticated) => {
             setUser(authenticated);
@@ -132,7 +140,7 @@ export default function MobileApp() {
   const activeTab = tab || tabs[0]?.id || '';
 
   return (
-    <div className="oj-mobile">
+    <div className="oj-mobile" translate="no">
       {layer === 'jarvis' ? (
         <JarvisCore
           today={today}
@@ -154,10 +162,15 @@ export default function MobileApp() {
       {openApp && (
         <AppWindow
           title={TITLES[openApp]}
+          specialist={SPECIALISTS[openApp]}
           tabs={tabs}
           activeTab={activeTab}
           onTabChange={setTab}
           onClose={closeApp}
+          onAskJarvis={() => {
+            setOpenApp(null);
+            setLayer('jarvis');
+          }}
         />
       )}
     </div>

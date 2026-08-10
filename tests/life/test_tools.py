@@ -94,6 +94,27 @@ def test_record_creates_an_expense(life, user, tools):
     assert life.store.count("transactions", user.id) == 1
 
 
+def test_record_normalizes_an_integer_amount_string(life, user, tools):
+    result = tools[1].execute(
+        kind="expense",
+        fields={"amount_cents": "4590", "category": "mercado"},
+    )
+    assert result.success
+    assert json.loads(result.content)["record"]["amount_cents"] == 4590
+    assert life.store.count("transactions", user.id) == 1
+
+
+@pytest.mark.parametrize("amount", [True, 4590.0, "45.90", None])
+def test_record_rejects_non_integer_amounts(life, user, tools, amount):
+    result = tools[1].execute(
+        kind="expense",
+        fields={"amount_cents": amount, "category": "mercado"},
+    )
+    assert result.success is False
+    assert result.content == "amount_cents must be an integer"
+    assert life.store.count("transactions", user.id) == 0
+
+
 def test_record_creates_income(life, user, tools):
     tools[1].execute(kind="income", fields={"amount_cents": 900000})
     row = life.store.list_records("transactions", user.id)[0]
@@ -124,6 +145,40 @@ def test_record_rejects_unknown_field(tools):
 def test_record_rejects_invalid_amount(tools):
     result = tools[1].execute(kind="expense", fields={"amount_cents": -100})
     assert result.success is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "fields", "table"),
+    [
+        ("account", {"name": "Nubank", "balance_cents": 10000}, "accounts"),
+        (
+            "bill",
+            {
+                "name": "Luz",
+                "amount_cents": 18000,
+                "status": "paid",
+                "paid_on": "2026-08-10",
+            },
+            "bills",
+        ),
+        (
+            "workout",
+            {"name": "Peito", "completed_at": "2026-08-10T10:00:00Z"},
+            "workouts",
+        ),
+        (
+            "task",
+            {"title": "Proposta", "status": "done", "done_at": "2026-08-10"},
+            "work_tasks",
+        ),
+    ],
+)
+def test_record_cannot_bypass_domain_actions(life, user, tools, kind, fields, table):
+    result = tools[1].execute(kind=kind, fields=fields)
+    assert result.success is False
+    assert "Fields require a domain action" in result.content
+    assert life.store.count(table, user.id) == 0
+    assert life.store.count("transactions", user.id) == 0
 
 
 def test_complete_pays_a_bill_and_recurs(life, user, tools):
