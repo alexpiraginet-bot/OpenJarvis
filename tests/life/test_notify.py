@@ -81,7 +81,7 @@ def test_overdue_bill_is_notified(life, user):
     destination, content = sender.sent[0]
     assert destination == "5511999999999"
     assert "Luz está vencida" in content
-    assert "R$180.00" in content
+    assert "R$ 180,00" in content
 
 
 # -- Wording -----------------------------------------------------------------
@@ -111,7 +111,7 @@ def test_digest_omits_amount_when_there_is_none(life, user):
         "work_tasks", user.id, {"title": "Enviar proposta", "due_on": "2026-08-01"}
     )
     alerts = LifeNotifier(life.service).pending_alerts(user, anchor=TODAY)
-    assert "R$0.00" not in render_digest(alerts, user)
+    assert "R$ 0,00" not in render_digest(alerts, user)
 
 
 # -- Deduplication -----------------------------------------------------------

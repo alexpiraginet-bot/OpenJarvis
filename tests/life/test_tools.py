@@ -90,7 +90,7 @@ def test_record_creates_an_expense(life, user, tools):
     )
     assert result.success
     payload = json.loads(result.content)
-    assert payload["created"] == "expense de R$45.90 em mercado"
+    assert payload["created"] == "expense de R$ 45,90 em mercado"
     assert life.store.count("transactions", user.id) == 1
 
 

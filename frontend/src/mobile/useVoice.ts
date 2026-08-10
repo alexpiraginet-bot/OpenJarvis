@@ -43,6 +43,11 @@ interface SpeechRecognitionLike {
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
+/** Diagnostics go to the console, never to the client's screen. */
+function logger(message: string): void {
+  if (import.meta.env.DEV) console.debug('[voice]', message);
+}
+
 function getRecognitionCtor(): SpeechRecognitionCtor | null {
   const scope = window as unknown as {
     SpeechRecognition?: SpeechRecognitionCtor;
@@ -183,16 +188,20 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     };
 
     recognition.onerror = (event) => {
-      // "no-speech" and "aborted" are routine on a screen that listens
-      // continuously; surfacing them as errors would keep the HUD red.
-      if (event.error === 'no-speech' || event.error === 'aborted') return;
-      if (event.error === 'not-allowed') {
-        setError('Permissão de microfone negada.');
+      // Only one recognition error is worth a client's attention, because it
+      // is the only one they can act on: a denied microphone. The rest are
+      // routine on a screen that listens continuously — a pause in speech, a
+      // restart between phrases, another app grabbing the mic, a flaky
+      // network — and the browser recovers from all of them via `onend`.
+      // Painting the HUD red with a raw error code teaches people to distrust
+      // a working app.
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setError('Preciso do microfone para ouvir você. Libere nas permissões.');
         setStatus('denied');
         wantListeningRef.current = false;
         return;
       }
-      setError(`Falha no reconhecimento: ${event.error}`);
+      logger(`recognition: ${event.error}`);
     };
 
     recognition.onend = () => {

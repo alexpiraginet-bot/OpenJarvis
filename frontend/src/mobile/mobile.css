@@ -242,8 +242,14 @@
 .oj-date {
   font-size: 14px;
   color: var(--oj-ink-dim);
-  text-transform: capitalize;
   margin-top: 4px;
+}
+
+/* Portuguese dates come from Intl lowercase ("segunda-feira, 10 de agosto").
+   `text-transform: capitalize` would also raise the "De", so only the first
+   letter is lifted. */
+.oj-date::first-letter {
+  text-transform: uppercase;
 }
 
 /* Today widget — the iOS widget metaphor, glass over the wallpaper. */
@@ -306,12 +312,17 @@
   background: var(--oj-ink-faint);
 }
 
+/* These are <span>s so they can live inside a <button> without nesting
+   interactive elements — which means they need an explicit display, or the
+   title and its detail render as one run-on line. */
 .oj-alert-body {
+  display: block;
   flex: 1;
   min-width: 0;
 }
 
 .oj-alert-title {
+  display: block;
   font-size: 15px;
   font-weight: 500;
   white-space: nowrap;
@@ -320,9 +331,13 @@
 }
 
 .oj-alert-detail {
+  display: block;
   font-size: 13px;
   color: var(--oj-ink-dim);
   margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .oj-alert-amount {

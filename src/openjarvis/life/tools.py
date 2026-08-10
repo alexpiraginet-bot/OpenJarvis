@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.life import LifeContext, open_life
+from openjarvis.life.money import format_money as _money
 from openjarvis.life.service import LifeServiceError
 from openjarvis.life.tenancy import User
 from openjarvis.tools._stubs import BaseTool, ToolSpec
@@ -85,12 +86,6 @@ def _resolve_user(life: LifeContext, user_id: str = "") -> User:
     raise LifeUserError(
         "No user selected. Pass user_id or set OPENJARVIS_LIFE_USER_ID."
     )
-
-
-def _money(cents: int, currency: str = "BRL") -> str:
-    """Format integer cents the way a person reads money."""
-    symbol = {"BRL": "R$", "USD": "$", "EUR": "€"}.get(currency, currency + " ")
-    return f"{symbol}{cents / 100:,.2f}"
 
 
 def _apply_date_default(kind: str, fields: Dict[str, Any]) -> Dict[str, Any]:

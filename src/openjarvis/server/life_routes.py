@@ -32,6 +32,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from openjarvis.life import LifeContext, open_life
+from openjarvis.life.money import format_money as _money
 from openjarvis.life.schema import APPS, SCHEMA
 from openjarvis.life.service import LifeServiceError, today_in
 from openjarvis.life.store import Filter, LifeStoreError
@@ -327,7 +328,7 @@ def create_life_router(db_path: str = "") -> APIRouter:
 
         if engine is None:
             return {
-                "answer": _fallback_answer(briefing, user),
+                "answer": _fallback_answer(briefing, user, question),
                 "source": "data",
                 "context": briefing,
             }
@@ -361,13 +362,13 @@ def create_life_router(db_path: str = "") -> APIRouter:
         except Exception as exc:  # noqa: BLE001 — degrade, never 500 the mic
             logger.warning("Life ask failed, serving data answer: %s", exc)
             return {
-                "answer": _fallback_answer(briefing, user),
+                "answer": _fallback_answer(briefing, user, question),
                 "source": "data",
                 "context": briefing,
             }
 
         return {
-            "answer": answer or _fallback_answer(briefing, user),
+            "answer": answer or _fallback_answer(briefing, user, question),
             "source": "model" if answer else "data",
             "context": briefing,
         }
@@ -566,12 +567,6 @@ def _filters_from_query(params: Dict[str, str]) -> List[Filter]:
     return filters
 
 
-def _money(cents: int, currency: str) -> str:
-    """Format integer cents for a spoken answer."""
-    symbol = {"BRL": "R$", "USD": "$", "EUR": "€"}.get(currency, currency + " ")
-    return f"{symbol}{cents / 100:,.2f}"
-
-
 def _life_context(briefing: Dict[str, Any], user: User) -> str:
     """Condense the briefing into a compact block for the system prompt.
 
@@ -616,10 +611,163 @@ def _life_context(briefing: Dict[str, Any], user: User) -> str:
     return "\n".join(lines)
 
 
-def _fallback_answer(briefing: Dict[str, Any], user: User) -> str:
-    """Answer from the data alone, for when no model is available."""
+#: Keyword → topic, for answering without a model. Deliberately small: this is
+#: a fallback, not an intent classifier. Anything it cannot place falls through
+#: to the briefing, which is a useful answer to almost any question.
+_TOPIC_KEYWORDS = {
+    "finance": (
+        "gast",
+        "gasto",
+        "saldo",
+        "dinheiro",
+        "mês",
+        "mes",
+        "conta",
+        "boleto",
+        "vence",
+        "vencendo",
+        "orçamento",
+        "orcamento",
+        "pagar",
+        "fatura",
+        "receb",
+        "entrou",
+        "saiu",
+    ),
+    "fitness": ("treino", "treinar", "academia", "peso", "malh", "exerc"),
+    "routine": ("hábito", "habito", "rotina", "sequência", "sequencia"),
+    "family": ("família", "familia", "aniversário", "aniversario", "filh", "esposa"),
+    "work": ("tarefa", "trabalho", "projeto", "prazo", "entrega"),
+}
+
+
+#: Within finance, these ask about specific obligations rather than totals.
+_BILL_KEYWORDS = (
+    "vence",
+    "vencendo",
+    "vencida",
+    "boleto",
+    "conta",
+    "pagar",
+    "fatura",
+    "atrasad",
+    "devendo",
+)
+
+
+def _asks_about_bills(question: str) -> bool:
+    """Whether a money question is about *which* bills, not the totals."""
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in _BILL_KEYWORDS)
+
+
+def _detect_topic(question: str) -> str:
+    """Best-guess topic for a question. Empty string when nothing matches."""
+    lowered = question.lower()
+    for topic, keywords in _TOPIC_KEYWORDS.items():
+        if any(keyword in lowered for keyword in keywords):
+            return topic
+    return ""
+
+
+def _fallback_answer(briefing: Dict[str, Any], user: User, question: str = "") -> str:
+    """Answer from the data alone, for when no model is available.
+
+    Routed by topic rather than always reciting the top alert. Without this,
+    "como está meu mês?" and "o que vence hoje?" get the same sentence, which
+    reads as broken even though the data behind it is right — and the voice
+    screen is where that lands hardest, because the client hears it.
+    """
+    currency = user.currency
+    finance = briefing["finance"]
+    balance = _money(finance["balance_cents"], currency)
+    topic = _detect_topic(question)
+
+    if topic == "finance":
+        # "O que tá vencendo?" wants the bills *named*. A summary that says
+        # "1 conta vencida" is a worse answer than the name of the bill, and
+        # spoken aloud it forces a second question.
+        if _asks_about_bills(question):
+            bills = [
+                alert
+                for alert in briefing["alerts"]
+                if alert["app"] == "finance" and alert["action"] == "pay_bill"
+            ]
+            if not bills:
+                return f"Nenhuma conta vencendo por perto. Seu saldo é {balance}."
+            named = "; ".join(
+                f"{bill['title']}"
+                + (
+                    f" ({_money(int(bill['amount_cents']), currency)})"
+                    if bill["amount_cents"]
+                    else ""
+                )
+                for bill in bills[:4]
+            )
+            more = len(bills) - 4
+            tail = f" E mais {more}." if more > 0 else ""
+            return f"{named}.{tail}"
+
+        overdue = finance["overdue_count"]
+        soon = finance["due_soon_count"]
+        parts = [
+            f"Seu saldo é {balance}.",
+            f"No mês entraram {_money(finance['income_cents'], currency)}"
+            f" e saíram {_money(finance['expense_cents'], currency)}.",
+        ]
+        if overdue:
+            parts.append(f"Você tem {overdue} conta(s) vencida(s).")
+        elif soon:
+            parts.append(f"{soon} conta(s) vencem nos próximos dias.")
+        else:
+            parts.append("Nenhuma conta pendente por perto.")
+        return " ".join(parts)
+
+    if topic == "fitness":
+        fitness = briefing["fitness"]
+        done = fitness["week_completed"]
+        planned = fitness["week_planned"]
+        since = fitness["days_since_last"]
+        tail = (
+            "Você ainda não registrou nenhum treino."
+            if since is None
+            else f"Seu último treino foi há {since} dia(s)."
+        )
+        todays = fitness.get("todays_workout")
+        head = f"Hoje tem {todays['name']}. " if todays else ""
+        return f"{head}Nesta semana você fez {done} de {planned} treinos. {tail}"
+
+    if topic == "routine":
+        routine = briefing["routine"]
+        if not routine["total"]:
+            return "Você ainda não cadastrou hábitos."
+        pending = routine["pending"]
+        if not pending:
+            return f"Todos os {routine['total']} hábitos de hoje estão feitos."
+        return (
+            f"Você fez {routine['completed']} de {routine['total']} hábitos hoje."
+            f" Faltam: {', '.join(pending)}."
+        )
+
+    if topic == "family":
+        upcoming = briefing["family"]["upcoming"]
+        if not upcoming:
+            return "Nada marcado com a família nos próximos dias."
+        first = upcoming[0]
+        when = "hoje" if first["days_away"] == 0 else f"em {first['days_away']} dia(s)"
+        return f"{first['title']} {when}, no dia {first['date']}."
+
+    if topic == "work":
+        work = briefing["work"]
+        if not work["open_count"]:
+            return "Nenhuma tarefa em aberto."
+        return (
+            f"Você tem {work['open_count']} tarefa(s) em aberto,"
+            f" {work['overdue_count']} atrasada(s)"
+            f" e {work['due_today_count']} para hoje."
+        )
+
     alerts = briefing["alerts"]
-    balance = _money(briefing["finance"]["balance_cents"], user.currency)
     if not alerts:
         return f"Tudo em dia. Seu saldo é {balance} e nada precisa de você agora."
     head = alerts[0]

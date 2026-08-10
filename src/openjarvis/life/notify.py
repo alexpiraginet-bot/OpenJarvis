@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, Sequence
 
+from openjarvis.life.money import format_money as _money
 from openjarvis.life.service import LifeService, today_in
 from openjarvis.life.tenancy import User
 from openjarvis.life.today import build_today
@@ -90,11 +91,6 @@ def alert_fingerprint(alert: Dict[str, Any]) -> str:
         f"{alert.get('app', '')}|{alert.get('record_id', '')}|{alert.get('action', '')}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
-
-
-def _money(cents: int, currency: str) -> str:
-    symbol = {"BRL": "R$", "USD": "$", "EUR": "€"}.get(currency, currency + " ")
-    return f"{symbol}{cents / 100:,.2f}"
 
 
 def render_digest(alerts: Sequence[Dict[str, Any]], user: User) -> str:
