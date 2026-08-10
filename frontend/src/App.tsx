@@ -8,6 +8,7 @@ import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { DataSourcesPage } from './pages/DataSourcesPage';
 import { LogsPage } from './pages/LogsPage';
+import MobileApp from './mobile/MobileApp';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
@@ -184,6 +185,9 @@ export default function App() {
     <>
       <UpdateChecker />
       <Routes>
+        {/* The client-facing mobile app. Outside <Layout> on purpose: it is a
+            full-screen phone surface, not a page in the desktop chrome. */}
+        <Route path="vida" element={<MobileApp />} />
         <Route element={<Layout />}>
           <Route index element={<ChatPage />} />
           <Route path="dashboard" element={<DashboardPage />} />

@@ -314,6 +314,19 @@ def create_app(
     app.include_router(upload_router)
     app.include_router(research_router)
     app.include_router(analytics_router)
+
+    # Life OS — the mobile app's API. Optional: a server without the life
+    # database still serves chat, so a failure here must not take startup down.
+    try:
+        from openjarvis.server.life_routes import create_life_router
+
+        life_router = create_life_router()
+        app.include_router(life_router)
+        app.state.life_context = getattr(life_router, "life_context", None)
+    except Exception as exc:
+        logger.warning("Life API unavailable: %s", exc)
+        app.state.life_context = None
+
     include_all_routes(app)
 
     # Restore SendBlue channel bindings from database on startup

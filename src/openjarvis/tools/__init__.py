@@ -142,4 +142,12 @@ try:
 except ImportError:
     pass
 
+# Life OS tools — give every agent read/write access to the client's finance,
+# fitness, routine, family and work data. Lives outside this package because
+# the domain layer is not a tool, but it registers here like any other.
+try:
+    import openjarvis.life.tools  # noqa: F401
+except ImportError:
+    pass
+
 __all__ = ["BaseTool", "ToolExecutor", "ToolSpec"]

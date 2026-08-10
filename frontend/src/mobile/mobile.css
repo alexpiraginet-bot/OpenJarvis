@@ -1,0 +1,870 @@
+/*
+ * Springboard styling — a home screen, not a web page.
+ *
+ * Written as plain CSS with an `oj-` prefix rather than utility classes: this
+ * shell is self-contained, ships as its own route, and must not shift if the
+ * surrounding design tokens are retuned. Dark by default — a phone home
+ * screen with a white background reads as a website.
+ */
+
+.oj-mobile {
+  --oj-ink: #ffffff;
+  --oj-ink-dim: rgba(255, 255, 255, 0.62);
+  --oj-ink-faint: rgba(255, 255, 255, 0.38);
+  --oj-glass: rgba(255, 255, 255, 0.1);
+  --oj-glass-strong: rgba(255, 255, 255, 0.16);
+  --oj-hairline: rgba(255, 255, 255, 0.14);
+  --oj-critical: #ff453a;
+  --oj-warning: #ff9f0a;
+  --oj-ok: #30d158;
+  --oj-radius: 22px;
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  color: var(--oj-ink);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Geist Variable', 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(120% 80% at 15% 0%, #2b3a67 0%, transparent 55%),
+    radial-gradient(100% 70% at 85% 15%, #5b2c6f 0%, transparent 50%),
+    linear-gradient(180deg, #12131a 0%, #0a0a0f 100%);
+  /* Respect the notch and the home indicator on real hardware. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  -webkit-font-smoothing: antialiased;
+}
+
+.oj-scroll {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* -- Jarvis core (tela inicial) -------------------------------------------- */
+
+.oj-jarvis {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  background:
+    radial-gradient(70% 50% at 50% 45%, rgba(8, 145, 178, 0.16) 0%, transparent 70%),
+    linear-gradient(180deg, #05070c 0%, #02040a 100%);
+}
+
+.oj-hud-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  flex-shrink: 0;
+}
+
+.oj-hud-readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  font-variant-numeric: tabular-nums;
+}
+
+.oj-hud-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: oj-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes oj-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.oj-hud-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+}
+
+/* The canvas fills the stage; the transparent button over it makes the whole
+   reactor tappable without putting a click handler on a <canvas>. */
+.oj-hud-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.oj-hud-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.oj-hud-hit {
+  position: absolute;
+  inset: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.oj-hud-text {
+  padding: 0 26px;
+  min-height: 108px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.oj-hud-said {
+  font-size: 19px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.95);
+  line-height: 1.35;
+}
+
+.oj-hud-answer {
+  font-size: 15px;
+  color: rgba(34, 211, 238, 0.92);
+  line-height: 1.45;
+  margin-top: 10px;
+}
+
+.oj-hud-hint,
+.oj-hud-error {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.42);
+  line-height: 1.5;
+}
+
+.oj-hud-error {
+  color: #f87171;
+}
+
+.oj-hud-bottom {
+  padding: 12px 18px calc(20px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.oj-hud-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.oj-chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.oj-chip--alert {
+  background: rgba(255, 69, 58, 0.18);
+  border-color: rgba(255, 69, 58, 0.35);
+  color: #ff8a80;
+}
+
+.oj-hud-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 22px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.oj-hud-mic[data-live='true'] {
+  background: rgba(34, 211, 238, 0.16);
+  border-color: rgba(34, 211, 238, 0.45);
+  color: #67e8f9;
+}
+
+/* -- Springboard ---------------------------------------------------------- */
+
+.oj-home {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 20px 20px 132px;
+  min-height: 100%;
+}
+
+.oj-home-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.oj-greeting {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.oj-date {
+  font-size: 14px;
+  color: var(--oj-ink-dim);
+  text-transform: capitalize;
+  margin-top: 4px;
+}
+
+/* Today widget — the iOS widget metaphor, glass over the wallpaper. */
+.oj-widget {
+  background: var(--oj-glass);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--oj-hairline);
+  border-radius: var(--oj-radius);
+  padding: 16px;
+}
+
+.oj-widget-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--oj-ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 12px;
+}
+
+.oj-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 0;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--oj-hairline);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.oj-alert:first-of-type {
+  border-top: none;
+}
+
+.oj-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.oj-dot--critical {
+  background: var(--oj-critical);
+}
+
+.oj-dot--warning {
+  background: var(--oj-warning);
+}
+
+.oj-dot--info {
+  background: var(--oj-ink-faint);
+}
+
+.oj-alert-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.oj-alert-title {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oj-alert-detail {
+  font-size: 13px;
+  color: var(--oj-ink-dim);
+  margin-top: 1px;
+}
+
+.oj-alert-amount {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* -- App grid ------------------------------------------------------------- */
+
+.oj-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px 12px;
+}
+
+.oj-app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.oj-app:active .oj-icon {
+  transform: scale(0.9);
+  filter: brightness(0.8);
+}
+
+.oj-icon {
+  position: relative;
+  width: 62px;
+  height: 62px;
+  /* The squircle: iOS uses a continuous corner curve, and 30% is the closest
+     a plain border-radius gets to it at this size. */
+  border-radius: 30%;
+  display: grid;
+  place-items: center;
+  transition: transform 0.15s ease, filter 0.15s ease;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.oj-icon--finance {
+  background: linear-gradient(160deg, #34d399, #059669);
+}
+.oj-icon--fitness {
+  background: linear-gradient(160deg, #fb923c, #ea580c);
+}
+.oj-icon--routine {
+  background: linear-gradient(160deg, #a78bfa, #7c3aed);
+}
+.oj-icon--family {
+  background: linear-gradient(160deg, #fb7185, #e11d48);
+}
+.oj-icon--work {
+  background: linear-gradient(160deg, #818cf8, #4f46e5);
+}
+.oj-icon--jarvis {
+  background: linear-gradient(160deg, #22d3ee, #0891b2);
+}
+
+.oj-app-label {
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.oj-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--oj-critical);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  display: grid;
+  place-items: center;
+  border: 2px solid rgba(10, 10, 15, 0.9);
+}
+
+/* -- Dock ----------------------------------------------------------------- */
+
+.oj-dock {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 26px;
+  background: rgba(28, 28, 34, 0.72);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid var(--oj-hairline);
+  color: var(--oj-ink-dim);
+  font-size: 15px;
+  cursor: pointer;
+  text-align: left;
+  width: calc(100% - 32px);
+}
+
+/* -- App window ----------------------------------------------------------- */
+
+.oj-window {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #16171f 0%, #0c0d12 100%);
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+
+.oj-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--oj-hairline);
+  flex-shrink: 0;
+}
+
+.oj-back {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  color: #0a84ff;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 6px;
+  font: inherit;
+}
+
+.oj-window-title {
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  text-align: center;
+  /* Balance the back button so the title sits optically centred. */
+  margin-right: 68px;
+}
+
+/* Internal tabs — the iOS segmented control. */
+.oj-segmented {
+  display: flex;
+  gap: 2px;
+  margin: 12px 16px;
+  padding: 2px;
+  background: rgba(120, 120, 128, 0.24);
+  border-radius: 9px;
+  flex-shrink: 0;
+}
+
+.oj-segment {
+  flex: 1;
+  padding: 6px 4px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--oj-ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.18s ease;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oj-segment[data-active='true'] {
+  background: rgba(99, 99, 110, 0.85);
+  font-weight: 600;
+}
+
+.oj-window-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 16px calc(32px + env(safe-area-inset-bottom));
+}
+
+/* -- Content primitives --------------------------------------------------- */
+
+.oj-card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--oj-hairline);
+  border-radius: 16px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.oj-card-label {
+  font-size: 12px;
+  color: var(--oj-ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.oj-stat {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  margin-top: 4px;
+}
+
+.oj-stat-row {
+  display: flex;
+  gap: 10px;
+}
+
+.oj-stat-row > .oj-card {
+  flex: 1;
+  margin-bottom: 12px;
+}
+
+.oj-stat--sm {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.oj-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--oj-ink-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 20px 0 8px;
+}
+
+.oj-list {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--oj-hairline);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.oj-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  border-top: 1px solid var(--oj-hairline);
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.oj-row:first-child {
+  border-top: none;
+}
+
+.oj-row--tappable {
+  cursor: pointer;
+}
+
+.oj-row--tappable:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.oj-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.oj-row-title {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.oj-row-sub {
+  font-size: 13px;
+  color: var(--oj-ink-dim);
+  margin-top: 2px;
+}
+
+.oj-row-value {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.oj-pos {
+  color: var(--oj-ok);
+}
+
+.oj-neg {
+  color: var(--oj-critical);
+}
+
+.oj-warn {
+  color: var(--oj-warning);
+}
+
+.oj-empty {
+  text-align: center;
+  color: var(--oj-ink-faint);
+  font-size: 14px;
+  padding: 40px 20px;
+}
+
+.oj-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.oj-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* -- Controls ------------------------------------------------------------- */
+
+.oj-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  border: none;
+  background: #0a84ff;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+}
+
+.oj-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.oj-btn--ghost {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.oj-btn--sm {
+  width: auto;
+  padding: 7px 13px;
+  font-size: 14px;
+  border-radius: 9px;
+}
+
+.oj-check {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--oj-ink-faint);
+  background: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.oj-check[data-done='true'] {
+  background: var(--oj-ok);
+  border-color: var(--oj-ok);
+}
+
+.oj-streak {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--oj-warning);
+  background: rgba(255, 159, 10, 0.16);
+  padding: 2px 7px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+/* -- Sheet (add forms) ---------------------------------------------------- */
+
+.oj-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  z-index: 20;
+}
+
+.oj-sheet {
+  width: 100%;
+  max-height: 88%;
+  overflow-y: auto;
+  background: #1c1d24;
+  border-radius: 20px 20px 0 0;
+  padding: 8px 16px calc(24px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--oj-hairline);
+}
+
+.oj-grabber {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.25);
+  margin: 6px auto 14px;
+}
+
+.oj-sheet-title {
+  font-size: 19px;
+  font-weight: 650;
+  margin-bottom: 14px;
+}
+
+.oj-field {
+  margin-bottom: 12px;
+}
+
+.oj-label {
+  display: block;
+  font-size: 13px;
+  color: var(--oj-ink-dim);
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+
+.oj-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--oj-hairline);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--oj-ink);
+  font-size: 16px; /* 16px stops iOS Safari zooming the viewport on focus. */
+  font-family: inherit;
+}
+
+.oj-input:focus {
+  outline: none;
+  border-color: #0a84ff;
+}
+
+.oj-error {
+  color: var(--oj-critical);
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+/* -- Login ---------------------------------------------------------------- */
+
+.oj-login {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 32px 24px calc(32px + env(safe-area-inset-bottom));
+}
+
+.oj-login-mark {
+  width: 68px;
+  height: 68px;
+  border-radius: 30%;
+  background: linear-gradient(160deg, #22d3ee, #0891b2);
+  display: grid;
+  place-items: center;
+  margin-bottom: 22px;
+  box-shadow: 0 8px 24px rgba(8, 145, 178, 0.4);
+}
+
+.oj-login-title {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.oj-login-sub {
+  color: var(--oj-ink-dim);
+  font-size: 15px;
+  margin: 8px 0 28px;
+  line-height: 1.45;
+}
+
+.oj-switch {
+  background: none;
+  border: none;
+  color: #0a84ff;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 14px 0 0;
+  font-family: inherit;
+  width: 100%;
+}
+
+.oj-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: oj-spin 0.7s linear infinite;
+  margin: 40px auto;
+}
+
+@keyframes oj-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oj-spinner {
+    animation-duration: 2s;
+  }
+  .oj-icon,
+  .oj-bar-fill,
+  .oj-segment {
+    transition: none;
+  }
+}
