@@ -1,0 +1,62 @@
+# Keep the build context small.
+#
+# Without this file the context is ~1.1 GB — 530 MB of frontend/node_modules,
+# 416 MB of .venv and 44 MB of .git — all uploaded to the builder before a
+# single layer is built. Both Dockerfiles reinstall dependencies inside the
+# image anyway, so none of it is wanted.
+#
+# Everything the images actually need is listed at the bottom as a re-include,
+# so a new heavyweight directory at the repo root is excluded by default
+# rather than silently joining the upload.
+
+# Dependencies — reinstalled in the image
+**/node_modules/
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+target/
+
+# VCS and CI
+.git/
+.github/
+.gitignore
+
+# Build outputs. The frontend stage rebuilds the PWA from source, so a stale
+# local build must not shadow it.
+src/openjarvis/server/static/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+deploy/vercel/.build/
+dist/
+build/
+*.egg-info/
+
+# Local state and secrets — a database or an .env has no business in an image
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+deploy/docker/.env
+
+# Docs, tests and research assets: not needed at runtime
+docs/
+site/
+tests/
+examples/
+assets/
+*.md
+!README.md
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Large binaries checked into the tree for the desktop build
+desktop/src-tauri/binaries/
