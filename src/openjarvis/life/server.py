@@ -38,8 +38,14 @@ def create_life_app(
     *,
     db_path: str = "",
     cors_origins: list[str] | None = None,
+    serve_static: bool = True,
 ) -> FastAPI:
-    """Build the Life-only application."""
+    """Build the Life-only application.
+
+    ``serve_static=False`` leaves the PWA to someone else — on Vercel the CDN
+    serves it from ``public/`` and only ``/v1/life`` reaches this function, so
+    a missing bundle there is correct rather than a misconfiguration.
+    """
     app = FastAPI(
         title="Jarvis — Life OS",
         description="Assistente pessoal: finanças, treino, rotina, família e trabalho",
@@ -67,7 +73,7 @@ def create_life_app(
         """Liveness probe. Open by design — it exposes nothing about a client."""
         return {"status": "ok", "service": "life"}
 
-    if _STATIC_DIR.is_dir():
+    if serve_static and _STATIC_DIR.is_dir():
         assets = _STATIC_DIR / "assets"
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
@@ -84,7 +90,7 @@ def create_life_app(
                 ):
                     return FileResponse(candidate)
             return FileResponse(_STATIC_DIR / "index.html")
-    else:
+    elif serve_static:
         logger.warning(
             "PWA bundle not found at %s — run `npm run build` in frontend/",
             _STATIC_DIR,
