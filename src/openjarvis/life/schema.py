@@ -68,7 +68,36 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
 );
 """
 
+# Keyed by the SHA-256 of the submitted email, never the address itself: this
+# table would otherwise become a log of who tried to sign in, which is exactly
+# the kind of data a breach should not find. Rows exist for addresses that were
+# never registered too — throttling only real accounts would turn the lockout
+# response into a user-enumeration oracle.
+_DDL_LOGIN_ATTEMPTS = """\
+CREATE TABLE IF NOT EXISTS login_attempts (
+    key              TEXT PRIMARY KEY,
+    failures         INTEGER NOT NULL DEFAULT 0,
+    first_failure_at TEXT    NOT NULL,
+    locked_until     TEXT
+);
+"""
+
 # -- Finance ----------------------------------------------------------------
+
+# The UNIQUE constraint is the dedupe: a scheduler that fires hourly must not
+# tell a client four times that the same bill is due. Structural, so no caller
+# can forget to check.
+_DDL_NOTIFICATIONS = """\
+CREATE TABLE IF NOT EXISTS notifications (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    sent_on     TEXT NOT NULL,
+    channel     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    UNIQUE (user_id, fingerprint, sent_on)
+);
+"""
 
 _DDL_ACCOUNTS = """\
 CREATE TABLE IF NOT EXISTS accounts (
@@ -276,6 +305,8 @@ CREATE TABLE IF NOT EXISTS work_tasks (
 _ALL_DDL = (
     _DDL_USERS,
     _DDL_TOKENS,
+    _DDL_LOGIN_ATTEMPTS,
+    _DDL_NOTIFICATIONS,
     _DDL_ACCOUNTS,
     _DDL_TRANSACTIONS,
     _DDL_BILLS,
@@ -296,6 +327,8 @@ _ALL_DDL = (
 # query the store emits, so a leading-column index serves all of them.
 _INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens (user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_notif_user_date"
+    " ON notifications (user_id, sent_on);",
     "CREATE INDEX IF NOT EXISTS idx_tx_user_date"
     " ON transactions (user_id, occurred_on);",
     "CREATE INDEX IF NOT EXISTS idx_tx_user_cat ON transactions (user_id, category);",

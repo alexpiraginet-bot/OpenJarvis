@@ -152,6 +152,67 @@ def test_patch_me_updates_profile(client, auth):
     assert response.json()["user"]["currency"] == "USD"
 
 
+def test_repeated_bad_passwords_lock_the_address(client, auth):
+    """Brute force against a financial account must hit a wall, not a wait."""
+    from openjarvis.life.tenancy import MAX_LOGIN_FAILURES
+
+    payload = {"email": "alex@exemplo.com", "password": "errada-000"}
+    for _ in range(MAX_LOGIN_FAILURES):
+        assert client.post("/v1/life/auth/login", json=payload).status_code == 401
+
+    blocked = client.post("/v1/life/auth/login", json=payload)
+    assert blocked.status_code == 429
+    assert blocked.headers.get("Retry-After")
+
+    # The correct password is refused too — otherwise the lock is decorative.
+    locked_out = client.post(
+        "/v1/life/auth/login",
+        json={"email": "alex@exemplo.com", "password": "senha-forte-123"},
+    )
+    assert locked_out.status_code == 429
+
+
+def test_a_successful_login_resets_the_counter(client, auth):
+    from openjarvis.life.tenancy import MAX_LOGIN_FAILURES
+
+    for _ in range(MAX_LOGIN_FAILURES - 1):
+        client.post(
+            "/v1/life/auth/login",
+            json={"email": "alex@exemplo.com", "password": "errada-000"},
+        )
+    good = client.post(
+        "/v1/life/auth/login",
+        json={"email": "alex@exemplo.com", "password": "senha-forte-123"},
+    )
+    assert good.status_code == 200
+
+    # Counter cleared: another near-miss run must not trip the lock.
+    for _ in range(MAX_LOGIN_FAILURES - 1):
+        assert (
+            client.post(
+                "/v1/life/auth/login",
+                json={"email": "alex@exemplo.com", "password": "errada-000"},
+            ).status_code
+            == 401
+        )
+
+
+def test_the_throttle_does_not_reveal_which_emails_exist(client, auth):
+    """A 429 for real accounts only would be an enumeration oracle."""
+    from openjarvis.life.tenancy import MAX_LOGIN_FAILURES
+
+    for _ in range(MAX_LOGIN_FAILURES):
+        client.post(
+            "/v1/life/auth/login",
+            json={"email": "fantasma@exemplo.com", "password": "x-errada-000"},
+        )
+    ghost = client.post(
+        "/v1/life/auth/login",
+        json={"email": "fantasma@exemplo.com", "password": "x-errada-000"},
+    )
+    assert ghost.status_code == 429
+
+
 # -- Authentication ----------------------------------------------------------
 
 

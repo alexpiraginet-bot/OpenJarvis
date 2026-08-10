@@ -42,6 +42,15 @@ DEFAULT_TOKEN_TTL_DAYS = 90
 
 MIN_PASSWORD_LENGTH = 8
 
+#: Failed logins tolerated before the address is locked out. Generous enough
+#: to absorb a fat-fingered password on a phone keyboard, tight enough that an
+#: online guessing attack gets nowhere.
+MAX_LOGIN_FAILURES = 5
+
+#: How long a lockout lasts, and how long a quiet period erases the counter.
+LOCKOUT_SECONDS = 900
+FAILURE_WINDOW_SECONDS = 900
+
 
 class AuthError(RuntimeError):
     """Raised when a credential is malformed, duplicated or rejected."""
@@ -94,6 +103,11 @@ def _hash_token(token: str) -> str:
 
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _attempt_key(email: str) -> str:
+    """Hash an address for the throttle table, so it stores no addresses."""
+    return hashlib.sha256(_normalize_email(email).encode("utf-8")).hexdigest()
 
 
 class UserStore:
@@ -200,6 +214,84 @@ class UserStore:
         if not hmac.compare_digest(expected, actual):
             return None
         return self._row_to_user(row)
+
+    # -- Brute-force protection ---------------------------------------------
+
+    def seconds_until_unlocked(
+        self, email: str, *, now: Optional[datetime] = None
+    ) -> int:
+        """Seconds an address must wait before it may try again. 0 = allowed.
+
+        Callers must consult this *before* verifying a password, and must
+        answer identically whether or not the address is registered — a
+        lockout that only happens for real accounts tells an attacker which
+        addresses exist.
+        """
+        now = now or datetime.now(timezone.utc)
+        row = self._conn.execute(
+            "SELECT locked_until FROM login_attempts WHERE key = ?",
+            (_attempt_key(email),),
+        ).fetchone()
+        if row is None or not row["locked_until"]:
+            return 0
+        try:
+            locked_until = datetime.fromisoformat(row["locked_until"])
+        except ValueError:
+            return 0
+        remaining = (locked_until - now).total_seconds()
+        return max(0, int(remaining))
+
+    def record_login_failure(
+        self, email: str, *, now: Optional[datetime] = None
+    ) -> int:
+        """Count a failed attempt and lock out once the threshold is crossed.
+
+        The counter resets after a quiet period rather than accumulating
+        forever, so a typo last month plus a typo today is not a lockout.
+        Returns the remaining lockout in seconds (0 when still allowed).
+        """
+        now = now or datetime.now(timezone.utc)
+        key = _attempt_key(email)
+        row = self._conn.execute(
+            "SELECT failures, first_failure_at FROM login_attempts WHERE key = ?",
+            (key,),
+        ).fetchone()
+
+        failures = 1
+        first_failure_at = now
+        if row is not None:
+            try:
+                previous_start = datetime.fromisoformat(row["first_failure_at"])
+            except ValueError:
+                previous_start = now
+            within_window = (
+                now - previous_start
+            ).total_seconds() <= FAILURE_WINDOW_SECONDS
+            if within_window:
+                failures = int(row["failures"]) + 1
+                first_failure_at = previous_start
+
+        locked_until = ""
+        if failures >= MAX_LOGIN_FAILURES:
+            locked_until = (now + timedelta(seconds=LOCKOUT_SECONDS)).isoformat()
+
+        self._conn.execute(
+            "INSERT INTO login_attempts (key, failures, first_failure_at,"
+            " locked_until) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET failures = excluded.failures,"
+            " first_failure_at = excluded.first_failure_at,"
+            " locked_until = excluded.locked_until",
+            (key, failures, first_failure_at.isoformat(), locked_until or None),
+        )
+        self._conn.commit()
+        return LOCKOUT_SECONDS if locked_until else 0
+
+    def clear_login_failures(self, email: str) -> None:
+        """Forget an address's failures — called on every successful login."""
+        self._conn.execute(
+            "DELETE FROM login_attempts WHERE key = ?", (_attempt_key(email),)
+        )
+        self._conn.commit()
 
     def get_user(self, user_id: str) -> Optional[User]:
         """Look up a user by id."""

@@ -212,12 +212,28 @@ def create_life_router(db_path: str = "") -> APIRouter:
 
     @router.post("/auth/login")
     async def login(body: LoginRequest) -> Dict[str, Any]:
-        """Exchange email and password for a bearer token."""
+        """Exchange email and password for a bearer token.
+
+        Throttled per address. The check runs *before* the password is
+        verified, and applies to unregistered addresses too — throttling only
+        real accounts would make the 429 itself a user-enumeration oracle.
+        """
+        locked_for = life.users.seconds_until_unlocked(body.email)
+        if locked_for > 0:
+            raise HTTPException(
+                status_code=429,
+                detail="Muitas tentativas. Tente novamente em alguns minutos.",
+                headers={"Retry-After": str(locked_for)},
+            )
+
         user = life.users.authenticate(body.email, body.password)
         if user is None:
+            life.users.record_login_failure(body.email)
             # One message for both failure modes — distinguishing them tells
             # an attacker which emails are registered.
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        life.users.clear_login_failures(body.email)
         token = life.users.issue_token(user.id, label=body.device or "app")
         return {"token": token, "user": user.to_dict()}
 
