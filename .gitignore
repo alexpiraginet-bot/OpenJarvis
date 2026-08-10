@@ -87,9 +87,20 @@ docs/plans/
 docs/superpowers/
 .superpowers/
 
-# Claude Code project instructions (per-developer)
-CLAUDE.md
-.claude/
+# Claude Code project instructions.
+#
+# Per-developer state (settings.local.json, caches, transcripts) stays ignored.
+# Two things are deliberately versioned instead, because they are shared team
+# tooling rather than personal config:
+#
+#   CLAUDE.md          — the working agreements every session must follow
+#   .claude/skills/    — skills the whole team relies on
+#
+# A skill that lives only under ~/.claude dies with the machine, which in an
+# ephemeral or remote session means it dies every session. Versioning it is
+# what makes it survive.
+.claude/*
+!.claude/skills/
 
 # Tauri auto-generated schemas
 **/src-tauri/gen/schemas/
