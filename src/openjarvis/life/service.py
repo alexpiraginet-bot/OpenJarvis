@@ -323,9 +323,7 @@ class LifeService:
         workout = self._store.get("workouts", user_id, workout_id)
         if workout is None:
             raise LifeServiceError(f"Workout not found: {workout_id}")
-        patch: Dict[str, Any] = {
-            "completed_at": datetime.now(timezone.utc).isoformat()
-        }
+        patch: Dict[str, Any] = {"completed_at": datetime.now(timezone.utc).isoformat()}
         if duration_min:
             patch["duration_min"] = int(duration_min)
         self._store.update("workouts", user_id, workout_id, patch)
@@ -395,9 +393,7 @@ class LifeService:
         for row in rows:
             name = row["exercise"]
             current = best.get(name)
-            if current is None or float(row["weight_kg"]) > float(
-                current["weight_kg"]
-            ):
+            if current is None or float(row["weight_kg"]) > float(current["weight_kg"]):
                 best[name] = {
                     "exercise": name,
                     "weight_kg": float(row["weight_kg"]),

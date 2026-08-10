@@ -137,9 +137,7 @@ def build_today(
         filters=(Filter("scheduled_on", "=", today_iso),),
         limit=10,
     )
-    pending_workout = next(
-        (w for w in todays_workouts if not w["completed_at"]), None
-    )
+    pending_workout = next((w for w in todays_workouts if not w["completed_at"]), None)
     if pending_workout is not None:
         alerts.append(
             {
@@ -189,9 +187,7 @@ def build_today(
         )
 
     # -- Family --------------------------------------------------------------
-    family = service.upcoming_family(
-        user.id, anchor=anchor, days=FAMILY_LOOKAHEAD_DAYS
-    )
+    family = service.upcoming_family(user.id, anchor=anchor, days=FAMILY_LOOKAHEAD_DAYS)
     for event in family:
         days_away = event["days_away"]
         when = "hoje" if days_away == 0 else f"em {days_away} dia(s)"

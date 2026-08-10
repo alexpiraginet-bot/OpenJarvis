@@ -109,9 +109,7 @@ def test_is_not_null_filter(life, user):
 
 def test_unknown_filter_column_raises(life, user):
     with pytest.raises(LifeStoreError):
-        life.store.list_records(
-            "accounts", user.id, filters=(Filter("saldo", "=", 1),)
-        )
+        life.store.list_records("accounts", user.id, filters=(Filter("saldo", "=", 1),))
 
 
 def test_unsupported_operator_raises(life, user):
@@ -145,9 +143,7 @@ def test_sum_and_group_sum(life, user):
             },
         )
     assert life.store.sum_column("transactions", user.id, "amount_cents") == 9300
-    grouped = life.store.group_sum(
-        "transactions", user.id, "category", "amount_cents"
-    )
+    grouped = life.store.group_sum("transactions", user.id, "category", "amount_cents")
     assert grouped[0] == {"label": "mercado", "total": 7500}
 
 

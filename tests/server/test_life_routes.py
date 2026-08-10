@@ -171,9 +171,7 @@ def test_endpoints_require_a_token(client, method, path):
 
 
 def test_invalid_token_is_rejected(client):
-    response = client.get(
-        "/v1/life/me", headers={"Authorization": "Bearer nao-existe"}
-    )
+    response = client.get("/v1/life/me", headers={"Authorization": "Bearer nao-existe"})
     assert response.status_code == 401
 
 
@@ -253,12 +251,14 @@ def test_patch_and_delete_a_record(client, auth):
     )
     assert patched.json()["record"]["name"] == "Ler 30min"
 
-    assert client.delete(
-        f"/v1/life/records/habits/{record_id}", headers=auth
-    ).status_code == 200
-    assert client.get(
-        f"/v1/life/records/habits/{record_id}", headers=auth
-    ).status_code == 404
+    assert (
+        client.delete(f"/v1/life/records/habits/{record_id}", headers=auth).status_code
+        == 200
+    )
+    assert (
+        client.get(f"/v1/life/records/habits/{record_id}", headers=auth).status_code
+        == 404
+    )
 
 
 def test_list_filters_by_equality_and_comparison(client, auth):
@@ -268,9 +268,7 @@ def test_list_filters_by_equality_and_comparison(client, auth):
             headers=auth,
             json={"fields": {"name": name, "amount_cents": 100, "due_on": due}},
         )
-    equality = client.get(
-        "/v1/life/records/bills?status=pending", headers=auth
-    ).json()
+    equality = client.get("/v1/life/records/bills?status=pending", headers=auth).json()
     assert equality["count"] == 2
 
     comparison = client.get(
@@ -313,9 +311,12 @@ def test_reading_another_clients_record_by_id_is_404(client, auth):
     ).json()
     other_auth = {"Authorization": f"Bearer {other['token']}"}
 
-    assert client.get(
-        f"/v1/life/records/accounts/{record_id}", headers=other_auth
-    ).status_code == 404
+    assert (
+        client.get(
+            f"/v1/life/records/accounts/{record_id}", headers=other_auth
+        ).status_code
+        == 404
+    )
 
 
 # -- Home and summaries ------------------------------------------------------
@@ -343,9 +344,7 @@ def test_today_reflects_stored_data(client, auth):
     client.post(
         "/v1/life/records/bills",
         headers=auth,
-        json={
-            "fields": {"name": "Luz", "amount_cents": 18000, "due_on": "2020-01-01"}
-        },
+        json={"fields": {"name": "Luz", "amount_cents": 18000, "due_on": "2020-01-01"}},
     )
     body = client.get("/v1/life/today", headers=auth).json()
     assert body["badges"]["finance"] == 1
@@ -353,9 +352,7 @@ def test_today_reflects_stored_data(client, auth):
     assert body["greeting"].endswith("Alex")
 
 
-@pytest.mark.parametrize(
-    "app", ["finance", "fitness", "routine", "family", "work"]
-)
+@pytest.mark.parametrize("app", ["finance", "fitness", "routine", "family", "work"])
 def test_every_app_has_a_summary(client, auth, app):
     assert client.get(f"/v1/life/summary/{app}", headers=auth).status_code == 200
 
@@ -394,9 +391,9 @@ def test_pay_bill_action(client, auth):
     assert body["bill"]["status"] == "paid"
     assert body["next_bill_id"]
 
-    balance = client.get(
-        f"/v1/life/records/accounts/{account}", headers=auth
-    ).json()["record"]["balance_cents"]
+    balance = client.get(f"/v1/life/records/accounts/{account}", headers=auth).json()[
+        "record"
+    ]["balance_cents"]
     assert balance == 82000
 
 
@@ -404,9 +401,7 @@ def test_paying_a_bill_twice_is_400(client, auth):
     bill = client.post(
         "/v1/life/records/bills",
         headers=auth,
-        json={
-            "fields": {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-07"}
-        },
+        json={"fields": {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-07"}},
     ).json()["record"]["id"]
     client.post(f"/v1/life/actions/pay-bill/{bill}", headers=auth, json={})
     second = client.post(f"/v1/life/actions/pay-bill/{bill}", headers=auth, json={})
@@ -469,9 +464,7 @@ def test_ask_answers_from_data_when_no_engine(client, auth):
     client.post(
         "/v1/life/records/bills",
         headers=auth,
-        json={
-            "fields": {"name": "Luz", "amount_cents": 18000, "due_on": "2020-01-01"}
-        },
+        json={"fields": {"name": "Luz", "amount_cents": 18000, "due_on": "2020-01-01"}},
     )
     body = client.post(
         "/v1/life/ask", headers=auth, json={"question": "o que tá vencendo?"}

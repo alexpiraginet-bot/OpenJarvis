@@ -70,9 +70,7 @@ def test_overview_returns_today(life, user, tools):
     assert payload["alerts"][0]["title"] == "Luz está vencida"
 
 
-@pytest.mark.parametrize(
-    "section", ["finance", "fitness", "routine", "family", "work"]
-)
+@pytest.mark.parametrize("section", ["finance", "fitness", "routine", "family", "work"])
 def test_overview_serves_each_section(tools, section):
     result = tools[0].execute(section=section)
     assert result.success
@@ -104,7 +102,7 @@ def test_record_creates_income(life, user, tools):
 
 
 def test_record_defaults_missing_dates_to_today(life, user, tools):
-    """"adiciona a conta de luz" with no date must not hit a NOT NULL error."""
+    """ "adiciona a conta de luz" with no date must not hit a NOT NULL error."""
     result = tools[1].execute(
         kind="bill", fields={"name": "Luz", "amount_cents": 18000}
     )
@@ -198,9 +196,7 @@ def test_bound_tool_ignores_a_user_id_from_the_model(life, user, other_user):
 
 def test_bound_write_lands_on_the_bound_client(life, user, other_user):
     record = LifeRecordTool(life, user_id=user.id)
-    record.execute(
-        kind="expense", fields={"amount_cents": 1000}, user_id=other_user.id
-    )
+    record.execute(kind="expense", fields={"amount_cents": 1000}, user_id=other_user.id)
     assert life.store.count("transactions", user.id) == 1
     assert life.store.count("transactions", other_user.id) == 0
 

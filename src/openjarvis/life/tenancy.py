@@ -242,9 +242,7 @@ class UserStore:
         replaced.
         """
         token = secrets.token_urlsafe(32)
-        expires = (
-            datetime.now(timezone.utc) + timedelta(days=ttl_days)
-        ).isoformat()
+        expires = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
         self._conn.execute(
             "INSERT INTO auth_tokens (token_hash, user_id, label, created_at,"
             " expires_at) VALUES (?, ?, ?, ?, ?)",

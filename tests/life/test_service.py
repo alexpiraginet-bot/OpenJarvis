@@ -205,18 +205,17 @@ def test_finance_summary_reports_flow_and_budgets(life, user):
 
 
 def test_finance_summary_excludes_other_months(life, user):
-    life.service.add_transaction(
-        user.id, amount_cents=50000, occurred_on="2026-07-20"
-    )
+    life.service.add_transaction(user.id, amount_cents=50000, occurred_on="2026-07-20")
     assert life.service.finance_summary(user.id, anchor=TODAY)["expense_cents"] == 0
 
 
 def test_finance_summary_survives_zero_limit_budget(life, user):
     """A zero limit must not raise ZeroDivisionError on the Today screen."""
     life.store.insert("budgets", user.id, {"category": "lazer", "limit_cents": 0})
-    assert life.service.finance_summary(user.id, anchor=TODAY)["budgets"][0][
-        "pct_used"
-    ] == 0.0
+    assert (
+        life.service.finance_summary(user.id, anchor=TODAY)["budgets"][0]["pct_used"]
+        == 0.0
+    )
 
 
 def test_finance_summary_ignores_archived_accounts(life, user):
@@ -236,8 +235,7 @@ def test_refresh_bill_statuses_marks_overdue(life, user):
     )
     assert life.service.refresh_bill_statuses(user.id, TODAY) == 1
     statuses = {
-        row["name"]: row["status"]
-        for row in life.store.list_records("bills", user.id)
+        row["name"]: row["status"] for row in life.store.list_records("bills", user.id)
     }
     assert statuses == {"Luz": "overdue", "Água": "pending"}
 

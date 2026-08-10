@@ -273,9 +273,7 @@ class LifeRecordTool(_LifeTool):
         try:
             user = self._acting_user(params, life)
         except LifeUserError as exc:
-            return ToolResult(
-                tool_name="life_record", success=False, content=str(exc)
-            )
+            return ToolResult(tool_name="life_record", success=False, content=str(exc))
 
         try:
             if kind in ("expense", "income"):
@@ -298,9 +296,7 @@ class LifeRecordTool(_LifeTool):
                 record = life.store.get(table, user.id, record_id) or {}
                 summary = f"{kind} criado"
         except (LifeServiceError, ValueError) as exc:
-            return ToolResult(
-                tool_name="life_record", success=False, content=str(exc)
-            )
+            return ToolResult(tool_name="life_record", success=False, content=str(exc))
 
         return ToolResult(
             tool_name="life_record",
@@ -370,9 +366,7 @@ class LifeCompleteTool(_LifeTool):
             if kind == "bill":
                 payload: Dict[str, Any] = life.service.pay_bill(user.id, record_id)
             elif kind == "workout":
-                payload = {
-                    "workout": life.service.complete_workout(user.id, record_id)
-                }
+                payload = {"workout": life.service.complete_workout(user.id, record_id)}
             elif kind == "habit":
                 result = life.service.check_in_habit(user.id, record_id)
                 payload = {

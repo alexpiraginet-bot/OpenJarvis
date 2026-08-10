@@ -148,9 +148,7 @@ class LifeStore:
         self._conn.commit()
         return cur.rowcount > 0
 
-    def delete_where(
-        self, table: str, user_id: str, filters: Sequence[Filter]
-    ) -> int:
+    def delete_where(self, table: str, user_id: str, filters: Sequence[Filter]) -> int:
         """Delete every matching row for this user. Returns the count."""
         spec = _spec(table)
         where_sql, params = self._build_where(spec, user_id, filters)
@@ -160,9 +158,7 @@ class LifeStore:
 
     # -- Reads ---------------------------------------------------------------
 
-    def get(
-        self, table: str, user_id: str, record_id: str
-    ) -> Optional[Dict[str, Any]]:
+    def get(self, table: str, user_id: str, record_id: str) -> Optional[Dict[str, Any]]:
         """Fetch one row by id, scoped to the user."""
         spec = _spec(table)
         row = self._conn.execute(
@@ -194,9 +190,7 @@ class LifeStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def count(
-        self, table: str, user_id: str, *, filters: Sequence[Filter] = ()
-    ) -> int:
+    def count(self, table: str, user_id: str, *, filters: Sequence[Filter] = ()) -> int:
         """Count matching rows for a user."""
         spec = _spec(table)
         where_sql, params = self._build_where(spec, user_id, filters)

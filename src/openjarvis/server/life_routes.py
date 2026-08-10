@@ -498,9 +498,7 @@ def create_life_router(db_path: str = "") -> APIRouter:
         user: User = Depends(current_user),
     ) -> Dict[str, Any]:
         """Undo a habit check-in — the inevitable mis-tap."""
-        removed = life.service.undo_habit_check_in(
-            user.id, habit_id, done_on=done_on
-        )
+        removed = life.service.undo_habit_check_in(user.id, habit_id, done_on=done_on)
         return {
             "removed": removed,
             "streak": life.service.habit_streak(user.id, habit_id),
@@ -591,8 +589,7 @@ def _life_context(briefing: Dict[str, Any], user: User) -> str:
     ]
     if briefing["family"]["upcoming"]:
         events = "; ".join(
-            f"{e['title']} ({e['date']})"
-            for e in briefing["family"]["upcoming"][:3]
+            f"{e['title']} ({e['date']})" for e in briefing["family"]["upcoming"][:3]
         )
         lines.append(f"Família: {events}")
     if briefing["alerts"]:

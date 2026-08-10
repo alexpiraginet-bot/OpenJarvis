@@ -74,9 +74,7 @@ class LifeContext:
         now_hour: int = 9,
     ) -> Dict[str, Any]:
         """Build the cross-domain Today briefing for ``user``."""
-        return build_today(
-            self.service, user, anchor=anchor, now_hour=now_hour
-        )
+        return build_today(self.service, user, anchor=anchor, now_hour=now_hour)
 
     def close(self) -> None:
         """Close the shared connection.

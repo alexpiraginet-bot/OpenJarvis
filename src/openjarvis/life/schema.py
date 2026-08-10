@@ -353,9 +353,7 @@ SCHEMA: Dict[str, TableSpec] = {
         ),
         "finance",
     ),
-    "budgets": TableSpec(
-        "budgets", ("category", "limit_cents", "period"), "finance"
-    ),
+    "budgets": TableSpec("budgets", ("category", "limit_cents", "period"), "finance"),
     "goals": TableSpec(
         "goals",
         ("name", "target_cents", "saved_cents", "target_date", "icon"),
