@@ -1,13 +1,34 @@
 @preconcurrency import AVFoundation
 import Foundation
+import OSLog
 import Speech
 
 final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable {
     typealias EventHandler = ([String: Any]) -> Void
 
+    struct AudioSessionProfile {
+        let category: AVAudioSession.Category
+        let mode: AVAudioSession.Mode
+        let options: AVAudioSession.CategoryOptions
+    }
+
     private static let spectrumBinCount = 64
     private static let silenceDelay: TimeInterval = 1.15
     private static let levelEmissionInterval: TimeInterval = 1.0 / 24.0
+    private static let listeningAudioProfile = AudioSessionProfile(
+        category: .record,
+        mode: .measurement,
+        options: [.duckOthers, .allowBluetoothHFP]
+    )
+    static let speakingAudioProfile = AudioSessionProfile(
+        category: .playback,
+        mode: .spokenAudio,
+        options: [.duckOthers]
+    )
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "JarvisLife",
+        category: "voice"
+    )
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "pt-BR"))
     private let audioEngine = AVAudioEngine()
@@ -16,6 +37,7 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
 
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var activeUtterance: AVSpeechUtterance?
     private var hasInputTap = false
     private var userRequestedStop = false
     private var latestTranscript = ""
@@ -31,9 +53,7 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
     func start() {
         guard !audioEngine.isRunning else { return }
         userRequestedStop = false
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
+        cancelSpeech()
 
         requestSpeechPermission { [weak self] speechAllowed in
             guard let self else { return }
@@ -56,6 +76,7 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
     func stop() {
         userRequestedStop = true
         finishRecognition(cancelTask: true)
+        cancelSpeech()
         emit(["type": "state", "state": "idle"])
     }
 
@@ -65,14 +86,22 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
 
         userRequestedStop = true
         finishRecognition(cancelTask: true)
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
+        cancelSpeech()
+
+        do {
+            try activateAudioSession(Self.speakingAudioProfile)
+            Self.logger.notice("Speech playback session activated")
+        } catch {
+            Self.logger.error("Speech playback session failed: \(error.localizedDescription)")
+            fail("Não consegui ativar a voz do Jarvis. Tente novamente.")
+            return
         }
 
         let utterance = AVSpeechUtterance(string: answer)
         utterance.voice = AVSpeechSynthesisVoice(language: "pt-BR")
         utterance.rate = 0.51
         utterance.pitchMultiplier = 0.96
+        activeUtterance = utterance
         emit(["type": "state", "state": "speaking"])
         synthesizer.speak(utterance)
     }
@@ -93,13 +122,8 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
         recognitionRequest = request
 
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(
-                .record,
-                mode: .measurement,
-                options: [.duckOthers, .allowBluetoothHFP]
-            )
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try activateAudioSession(Self.listeningAudioProfile)
+            Self.logger.notice("Speech recognition session activated")
 
             let inputNode = audioEngine.inputNode
             let format = inputNode.outputFormat(forBus: 0)
@@ -130,6 +154,39 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
         }
 
         emit(["type": "state", "state": "listening"])
+    }
+
+    private func activateAudioSession(_ profile: AudioSessionProfile) throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(
+            profile.category,
+            mode: profile.mode,
+            options: profile.options
+        )
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
+    private func cancelSpeech() {
+        activeUtterance = nil
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        deactivateAudioSession()
+    }
+
+    private func finishSpeech(_ utterance: AVSpeechUtterance) {
+        guard utterance === activeUtterance else { return }
+        activeUtterance = nil
+        deactivateAudioSession()
+        Self.logger.notice("Speech playback session finished")
+        emit(["type": "state", "state": "idle"])
+    }
+
+    private func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 
     private func handleRecognitionResult(
@@ -177,10 +234,7 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
         }
         recognitionTask = nil
         recognitionRequest = nil
-        try? AVAudioSession.sharedInstance().setActive(
-            false,
-            options: .notifyOthersOnDeactivation
-        )
+        deactivateAudioSession()
         emit([
             "type": "level",
             "level": 0,
@@ -316,13 +370,13 @@ final class NativeSpeechController: NSObject, AVSpeechSynthesizerDelegate, @unch
         _ synthesizer: AVSpeechSynthesizer,
         didFinish utterance: AVSpeechUtterance
     ) {
-        emit(["type": "state", "state": "idle"])
+        finishSpeech(utterance)
     }
 
     func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,
         didCancel utterance: AVSpeechUtterance
     ) {
-        emit(["type": "state", "state": "idle"])
+        finishSpeech(utterance)
     }
 }

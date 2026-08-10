@@ -28,7 +28,7 @@ from openjarvis.life.schema import APPS, SCHEMA, TableSpec, ensure_schema
 from openjarvis.life.service import LifeService, LifeServiceError
 from openjarvis.life.store import Filter, LifeStore, LifeStoreError
 from openjarvis.life.tenancy import AuthError, User, UserStore
-from openjarvis.life.today import build_today
+from openjarvis.life.today import build_today, build_voice_today
 
 __all__ = [
     "APPS",
@@ -44,6 +44,7 @@ __all__ = [
     "User",
     "UserStore",
     "build_today",
+    "build_voice_today",
     "default_db_path",
     "ensure_schema",
     "open_life",
@@ -75,6 +76,16 @@ class LifeContext:
     ) -> Dict[str, Any]:
         """Build the cross-domain Today briefing for ``user``."""
         return build_today(self.service, user, anchor=anchor, now_hour=now_hour)
+
+    def voice_today(
+        self,
+        user: User,
+        *,
+        anchor: Optional[date] = None,
+        now_hour: int = 9,
+    ) -> Dict[str, Any]:
+        """Build the latency-sensitive briefing used by spoken turns."""
+        return build_voice_today(self.service, user, anchor=anchor, now_hour=now_hour)
 
     def close(self) -> None:
         """Close the shared connection.

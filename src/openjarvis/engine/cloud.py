@@ -31,6 +31,7 @@ PRICING: Dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-5": (10.00, 30.00),
     "gpt-5.4": (15.00, 60.00),
+    "gpt-5.6-luna": (1.00, 6.00),
     "gpt-5-mini": (0.25, 2.00),
     "o3-mini": (1.10, 4.40),
     "claude-sonnet-4-20250514": (3.00, 15.00),
@@ -62,6 +63,7 @@ _OPENAI_MODELS = [
     "gpt-4o-mini",
     "gpt-5",
     "gpt-5.4",
+    "gpt-5.6-luna",
     "gpt-5-mini",
     "o3-mini",
 ]

@@ -444,7 +444,7 @@ def create_life_router(db_path: str = "") -> APIRouter:
                 headers={"Retry-After": str(int(_ASK_WINDOW_SECONDS))},
             )
 
-        briefing = _build_today(life, user)
+        briefing = _build_voice_today(life, user)
         context = _life_context(briefing, user)
         engine = getattr(request.app.state, "engine", None)
 
@@ -620,9 +620,7 @@ def create_life_router(db_path: str = "") -> APIRouter:
         if bypassed:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Fields require a domain action: " + ", ".join(bypassed)
-                ),
+                detail=("Fields require a domain action: " + ", ".join(bypassed)),
             )
         try:
             ok = life.store.update(table, user.id, record_id, body.fields)
@@ -742,9 +740,7 @@ def _require_known_fields(table: str, fields: Dict[str, Any]) -> None:
     """Validate fields before a domain service replaces generic insertion."""
     unknown = sorted(set(fields).difference(SCHEMA[table].columns))
     if unknown:
-        raise LifeStoreError(
-            f"Unknown column {unknown[0]!r} on table {table!r}"
-        )
+        raise LifeStoreError(f"Unknown column {unknown[0]!r} on table {table!r}")
 
 
 def _filters_from_query(params: Dict[str, str]) -> List[Filter]:
@@ -1006,6 +1002,17 @@ def _build_today(life: LifeContext, user: User) -> Dict[str, Any]:
     except Exception:
         now_hour = datetime.now().hour
     return life.today(user, anchor=today_in(user.timezone), now_hour=now_hour)
+
+
+def _build_voice_today(life: LifeContext, user: User) -> Dict[str, Any]:
+    """Assemble the low-round-trip briefing for the spoken assistant."""
+    try:
+        from zoneinfo import ZoneInfo  # noqa: PLC0415 — optional tzdata
+
+        now_hour = datetime.now(ZoneInfo(user.timezone)).hour
+    except Exception:
+        now_hour = datetime.now().hour
+    return life.voice_today(user, anchor=today_in(user.timezone), now_hour=now_hour)
 
 
 def app_ids() -> List[str]:

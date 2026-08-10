@@ -101,6 +101,31 @@ class TestCloudOpenAI:
         # $0.25/M input + $2.00/M output = $2.25
         assert cost == pytest.approx(2.25)
 
+    def test_gpt_5_6_luna_cost_and_latency_controls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine = _make_cloud_engine(monkeypatch)
+        fake_client = mock.MagicMock()
+        fake_client.chat.completions.create.return_value = _fake_openai_response(
+            content="Olá", model="gpt-5.6-luna"
+        )
+        engine._openai_client = fake_client
+
+        result = engine.generate(
+            [Message(role=Role.USER, content="Oi")],
+            model="gpt-5.6-luna",
+            reasoning_effort="none",
+            verbosity="low",
+        )
+
+        assert result["content"] == "Olá"
+        sent = fake_client.chat.completions.create.call_args.kwargs
+        assert sent["reasoning_effort"] == "none"
+        assert sent["verbosity"] == "low"
+        assert estimate_cost("gpt-5.6-luna", 1_000_000, 1_000_000) == pytest.approx(
+            7.00
+        )
+
     def test_gpt_5_mini_tool_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         engine = _make_cloud_engine(monkeypatch)
         fake_tool_call = SimpleNamespace(
@@ -657,6 +682,7 @@ class TestPricingTable:
     def test_all_new_models_in_pricing(self) -> None:
         expected = [
             "gpt-5-mini",
+            "gpt-5.6-luna",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
             "claude-sonnet-5",

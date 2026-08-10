@@ -38,6 +38,24 @@ class JarvisActionError(RuntimeError):
     """Raised when an action proposal cannot change state safely."""
 
 
+class _InteractiveLifeEngine:
+    """Tune GPT-5 calls for a short, spoken interaction loop."""
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+        self.engine_id = getattr(delegate, "engine_id", "")
+
+    def generate(self, messages: List[Message], **kwargs: Any) -> Dict[str, Any]:
+        model = str(kwargs.get("model", "")).lower()
+        if model.startswith("gpt-5.6"):
+            kwargs.setdefault("reasoning_effort", "none")
+            kwargs.setdefault("verbosity", "low")
+        elif model.startswith("gpt-5"):
+            kwargs.setdefault("reasoning_effort", "minimal")
+            kwargs.setdefault("verbosity", "low")
+        return self._delegate.generate(messages, **kwargs)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -400,7 +418,8 @@ class JarvisRuntime:
         self._user_id = user_id
         self.actions = JarvisActionStore(life)
         self.budget = AiBudgetStore(life)
-        guarded_engine = BudgetedEngine(engine, self.budget, user_id)
+        interactive_engine = _InteractiveLifeEngine(engine)
+        guarded_engine = BudgetedEngine(interactive_engine, self.budget, user_id)
         overview, record, complete = life_tools_for(life, user_id)
         tools: List[BaseTool] = [
             overview,

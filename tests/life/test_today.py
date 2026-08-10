@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from openjarvis.life.today import build_today
+from openjarvis.life.today import build_today, build_voice_today
 
 TODAY = date(2026, 8, 10)
 
@@ -242,3 +242,61 @@ def test_finance_block_reports_month_flow(life, user):
     assert finance["income_cents"] == 500000
     assert finance["expense_cents"] == 125000
     assert finance["net_cents"] == 375000
+
+
+def test_voice_today_matches_spoken_cross_domain_context(life, user):
+    life.store.insert("accounts", user.id, {"name": "Nubank", "balance_cents": 320000})
+    life.service.add_transaction(
+        user.id, amount_cents=500000, kind="income", occurred_on="2026-08-01"
+    )
+    life.store.insert(
+        "bills", user.id, {"name": "Luz", "amount_cents": 18000, "due_on": "2026-08-01"}
+    )
+    life.store.insert("habits", user.id, {"name": "Ler"})
+    life.store.insert(
+        "work_tasks", user.id, {"title": "Enviar proposta", "due_on": TODAY.isoformat()}
+    )
+
+    briefing = build_voice_today(life.service, user, anchor=TODAY)
+
+    assert briefing["finance"]["balance_cents"] == 320000
+    assert briefing["finance"]["income_cents"] == 500000
+    assert briefing["finance"]["overdue_count"] == 1
+    assert briefing["routine"]["pending"] == ["Ler"]
+    assert briefing["work"]["due_today_count"] == 1
+    assert briefing["badges"] == {
+        "finance": 1,
+        "fitness": 0,
+        "routine": 1,
+        "family": 0,
+        "work": 1,
+    }
+
+
+def test_voice_today_reads_all_domains_in_one_query(life, user, monkeypatch):
+    calls = 0
+    execute = life.connection.execute
+
+    def counted_execute(sql, params=()):
+        nonlocal calls
+        calls += 1
+        return execute(sql, params)
+
+    monkeypatch.setattr(life.connection, "execute", counted_execute)
+
+    build_voice_today(life.service, user, anchor=TODAY)
+
+    assert calls == 1
+
+
+def test_voice_today_never_mixes_two_clients(life, user, other_user):
+    life.store.insert(
+        "bills",
+        user.id,
+        {"name": "Conta do Alex", "amount_cents": 100, "due_on": "2026-08-01"},
+    )
+
+    briefing = build_voice_today(life.service, other_user, anchor=TODAY)
+
+    assert briefing["alerts"] == []
+    assert briefing["greeting"] == "Bom dia, Bruna"

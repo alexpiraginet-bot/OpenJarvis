@@ -10,6 +10,7 @@ from openjarvis.life.jarvis import (
     JarvisActionError,
     JarvisActionStore,
     JarvisRuntime,
+    _InteractiveLifeEngine,
 )
 from openjarvis.life.schema import CURRENT_SCHEMA_VERSION
 
@@ -263,3 +264,47 @@ def test_runtime_turns_a_model_write_into_a_proposal(life, user):
     assert "confirme" in result["answer"]
     assert result["proposals"][0]["status"] == "pending"
     assert life.store.count("transactions", user.id) == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_effort"),
+    [
+        ("gpt-5-mini", "minimal"),
+        ("gpt-5.6-luna", "none"),
+    ],
+)
+def test_interactive_life_engine_uses_low_latency_gpt_controls(model, expected_effort):
+    class FakeEngine:
+        def __init__(self):
+            self.kwargs = None
+
+        def generate(self, messages, **kwargs):
+            self.kwargs = kwargs
+            return {"content": "Olá"}
+
+    delegate = FakeEngine()
+    engine = _InteractiveLifeEngine(delegate)
+
+    result = engine.generate([], model=model, max_tokens=100)
+
+    assert result["content"] == "Olá"
+    assert delegate.kwargs["reasoning_effort"] == expected_effort
+    assert delegate.kwargs["verbosity"] == "low"
+
+
+def test_interactive_life_engine_does_not_send_openai_controls_to_anthropic():
+    class FakeEngine:
+        def __init__(self):
+            self.kwargs = None
+
+        def generate(self, messages, **kwargs):
+            self.kwargs = kwargs
+            return {"content": "Olá"}
+
+    delegate = FakeEngine()
+    engine = _InteractiveLifeEngine(delegate)
+
+    engine.generate([], model="claude-sonnet-4-6")
+
+    assert "reasoning_effort" not in delegate.kwargs
+    assert "verbosity" not in delegate.kwargs

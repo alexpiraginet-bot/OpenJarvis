@@ -32,4 +32,12 @@ final class JarvisConfigurationTests: XCTestCase {
         )
         XCTAssertEqual(NativeSpeechController.normalizedLevel(forRMS: 1), 1)
     }
+
+    func testNativeSpeechUsesAudiblePlaybackSession() {
+        let profile = NativeSpeechController.speakingAudioProfile
+
+        XCTAssertEqual(profile.category, .playback)
+        XCTAssertEqual(profile.mode, .spokenAudio)
+        XCTAssertTrue(profile.options.contains(.duckOthers))
+    }
 }
