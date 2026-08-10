@@ -49,7 +49,7 @@ app_target.build_configurations.each do |configuration|
   settings["ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME"] = "AccentColor"
   settings["CLANG_ENABLE_MODULES"] = "YES"
   settings["CODE_SIGN_STYLE"] = "Automatic"
-  settings["CURRENT_PROJECT_VERSION"] = "3"
+  settings["CURRENT_PROJECT_VERSION"] = "5"
   settings["DEVELOPMENT_TEAM"] = "NP9X453K55"
   settings["ENABLE_PREVIEWS"] = "YES"
   settings["ENABLE_USER_SCRIPT_SANDBOXING"] = "YES"

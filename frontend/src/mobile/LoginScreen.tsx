@@ -1,6 +1,6 @@
 /** Entrada do cliente — login ou primeiro acesso. */
 
-import { BrainCircuit, ShieldCheck } from 'lucide-react';
+import { Fingerprint, ShieldCheck, Waves } from 'lucide-react';
 import { useState } from 'react';
 import { login, register } from './api';
 import type { LifeUser } from './types';
@@ -38,61 +38,82 @@ export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
     <div className="oj-login">
       <div className="oj-login-system">
         <span className="oj-system-led" />
-        SECURE PERSONAL SYSTEM
-      </div>
-      <div className="oj-login-mark">
-        <BrainCircuit size={34} />
-      </div>
-      <div className="oj-login-code">JARVIS LIFE / IDENTITY GATE</div>
-      <h1 className="oj-login-title">
-        {mode === 'login' ? 'Bem-vindo de volta' : 'Sua vida, na palma da mão'}
-      </h1>
-      <p className="oj-login-sub">
-        {mode === 'login'
-          ? 'Entre para falar com o seu Jarvis.'
-          : 'Finanças, treino, rotina, família e trabalho — em um só lugar, com um assistente que conhece tudo isso.'}
-      </p>
-
-      <div className="oj-login-capabilities" aria-label="Capacidades do sistema">
-        <span>5 especialistas IA</span>
-        <span>voz nativa</span>
-        <span><ShieldCheck size={12} /> dados protegidos</span>
+        <span>SECURE PERSONAL SYSTEM</span>
+        <span className="oj-login-system-id">JL / 05</span>
       </div>
 
-      {error && <div className="oj-error">{error}</div>}
+      <div className="oj-login-reactor" aria-hidden="true">
+        <span className="oj-login-orbit oj-login-orbit--outer" />
+        <span className="oj-login-orbit oj-login-orbit--middle" />
+        <span className="oj-login-orbit oj-login-orbit--inner" />
+        <span className="oj-login-sweep" />
+        <img src="/aether-neural-core.png" alt="" />
+        <span className="oj-login-core-pulse" />
+        <span className="oj-login-coordinate oj-login-coordinate--left">
+          IDENTITY<br />ENCRYPTED
+        </span>
+        <span className="oj-login-coordinate oj-login-coordinate--right">
+          CORE LINK<br />STANDBY
+        </span>
+      </div>
 
-      {mode === 'register' && (
-        <Field label="Nome" value={name} onChange={setName} placeholder="Alex" />
-      )}
-      <Field
-        label="E-mail"
-        value={email}
-        onChange={setEmail}
-        type="email"
-        placeholder="voce@exemplo.com"
-      />
-      <Field
-        label="Senha"
-        value={password}
-        onChange={setPassword}
-        type="password"
-        placeholder="mínimo 8 caracteres"
-      />
+      <section className="oj-login-console">
+        <div className="oj-login-console-head">
+          <div>
+            <div className="oj-login-code">JARVIS LIFE / IDENTITY GATE</div>
+            <h1 className="oj-login-title">
+              {mode === 'login' ? 'Acesso ao centro de comando' : 'Ativar seu sistema pessoal'}
+            </h1>
+          </div>
+          <Fingerprint size={28} aria-hidden="true" />
+        </div>
+        <p className="oj-login-sub">
+          {mode === 'login'
+            ? 'Identifique-se para sincronizar o núcleo, seus especialistas e toda a sua vida.'
+            : 'Finanças, treino, rotina, família e trabalho conectados a um único cérebro por voz.'}
+        </p>
 
-      <Button onClick={submit} disabled={busy}>
-        {busy ? 'Entrando…' : mode === 'login' ? 'Entrar' : 'Criar conta'}
-      </Button>
+        <div className="oj-login-capabilities" aria-label="Capacidades do sistema">
+          <span><Waves size={12} /> voz neural</span>
+          <span>5 especialistas IA</span>
+          <span><ShieldCheck size={12} /> dados protegidos</span>
+        </div>
 
-      <button
-        type="button"
-        className="oj-switch"
-        onClick={() => {
-          setMode(mode === 'login' ? 'register' : 'login');
-          setError('');
-        }}
-      >
-        {mode === 'login' ? 'Criar uma conta' : 'Já tenho conta'}
-      </button>
+        {error && <div className="oj-error">{error}</div>}
+
+        {mode === 'register' && (
+          <Field label="Nome" value={name} onChange={setName} placeholder="Alex" />
+        )}
+        <Field
+          label="E-mail"
+          value={email}
+          onChange={setEmail}
+          type="email"
+          placeholder="voce@exemplo.com"
+        />
+        <Field
+          label="Senha"
+          value={password}
+          onChange={setPassword}
+          type="password"
+          placeholder="mínimo 8 caracteres"
+        />
+
+        <Button onClick={submit} disabled={busy}>
+          {busy ? 'Sincronizando…' : mode === 'login' ? 'Entrar no sistema' : 'Ativar Jarvis Life'}
+        </Button>
+
+        <button
+          type="button"
+          className="oj-switch"
+          onClick={() => {
+            setMode(mode === 'login' ? 'register' : 'login');
+            setError('');
+          }}
+        >
+          {mode === 'login' ? 'Criar uma identidade' : 'Já tenho identidade'}
+        </button>
+      </section>
     </div>
   );
 }

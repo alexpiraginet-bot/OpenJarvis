@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -56,6 +57,15 @@ def test_password_is_never_stored_in_plaintext(life, user):
 def test_token_round_trip(life, user):
     token = life.users.issue_token(user.id, label="iphone")
     assert life.users.resolve_token(token) == user.id
+
+
+def test_parallel_token_resolution_never_drops_a_valid_session(life, user):
+    token = life.users.issue_token(user.id, label="parallel")
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        resolved = list(executor.map(life.users.resolve_token, [token] * 160))
+
+    assert resolved == [user.id] * 160
 
 
 def test_token_plaintext_is_not_stored(life, user):

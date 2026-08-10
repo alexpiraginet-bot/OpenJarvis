@@ -123,6 +123,21 @@ def test_sqlite_round_trip(db):
     assert row["s"] == "um"
 
 
+def test_read_result_is_buffered_before_a_later_commit(db):
+    """A concurrent request must not invalidate an already-returned result."""
+    db.execute("INSERT INTO t (id, n, s) VALUES (?, ?, ?)", ("a", 1, "um"))
+    db.commit()
+
+    result = db.execute("SELECT * FROM t ORDER BY id")
+    db.execute("UPDATE t SET n = ? WHERE id = ?", (2, "a"))
+    db.commit()
+
+    row = result.fetchone()
+    assert row["id"] == "a"
+    assert row["n"] == 1
+    assert result.fetchone() is None
+
+
 def test_rowcount_is_available(db):
     db.execute("INSERT INTO t (id, n, s) VALUES (?, ?, ?)", ("a", 1, "um"))
     db.commit()

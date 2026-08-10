@@ -8,8 +8,13 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { AppWindow, type Tab } from './AppWindow';
 import { fetchMe, fetchToday, getToken, logout } from './api';
+import {
+  ConnectionsAbout,
+  ConnectionsTab,
+} from './apps/ConnectionsApp';
 import {
   BillsTab,
   FinanceOverview,
@@ -23,33 +28,36 @@ import { ProjectsTab, TasksTab } from './apps/WorkApp';
 import { JarvisCore } from './JarvisCore';
 import { LoginScreen } from './LoginScreen';
 import { Springboard } from './Springboard';
-import type { AppId, LifeUser, Today } from './types';
+import type { LifeUser, ShellAppId, Today } from './types';
 import { Button, Spinner } from './ui';
 import './mobile.css';
 
-const TITLES: Record<AppId, string> = {
+const TITLES: Record<ShellAppId, string> = {
   finance: 'Finanças',
   fitness: 'Treino',
   routine: 'Rotina',
   family: 'Família',
   work: 'Trabalho',
+  connections: 'Conexões',
 };
 
-const SPECIALISTS: Record<AppId, string> = {
+const SPECIALISTS: Record<ShellAppId, string> = {
   finance: 'Diretor financeiro IA',
   fitness: 'Coach de performance IA',
   routine: 'Chefe de gabinete IA',
   family: 'Concierge familiar IA',
   work: 'Assistente executivo IA',
+  connections: 'Engenheiro de integrações IA',
 };
 
 type Layer = 'jarvis' | 'springboard';
 
 export default function MobileApp() {
+  const reduceMotion = useReducedMotion();
   const [user, setUser] = useState<LifeUser | null>(null);
   const [checking, setChecking] = useState(true);
   const [layer, setLayer] = useState<Layer>('jarvis');
-  const [openApp, setOpenApp] = useState<AppId | null>(null);
+  const [openApp, setOpenApp] = useState<ShellAppId | null>(null);
   const [tab, setTab] = useState('');
   const [today, setToday] = useState<Today | null>(null);
   const [loadingToday, setLoadingToday] = useState(false);
@@ -94,7 +102,7 @@ export default function MobileApp() {
     if (user) refresh();
   }, [user, refresh]);
 
-  const handleOpenApp = useCallback((app: AppId) => {
+  const handleOpenApp = useCallback((app: ShellAppId) => {
     setOpenApp(app);
     setTab('');
     setLayer('springboard');
@@ -141,44 +149,111 @@ export default function MobileApp() {
 
   return (
     <div className="oj-mobile" translate="no">
-      {layer === 'jarvis' ? (
-        <JarvisCore
-          today={today}
-          onOpenSpringboard={() => setLayer('springboard')}
-          onRefresh={refresh}
-        />
-      ) : (
-        <Springboard
-          today={today}
-          loading={loadingToday}
-          error={error}
-          userName={user.name}
-          onOpenApp={handleOpenApp}
-          onAskJarvis={() => setLayer('jarvis')}
-          onLogout={handleLogout}
-        />
-      )}
+      <AnimatePresence initial={false} mode="sync">
+        <motion.div
+          key={layer}
+          className="oj-shell-layer"
+          initial={
+            reduceMotion
+              ? false
+              : layer === 'springboard'
+                ? { opacity: 0, scale: 0.965, y: '7%' }
+                : { opacity: 0, scale: 1.025, y: '-4%' }
+          }
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={
+            reduceMotion
+              ? { opacity: 1 }
+              : layer === 'springboard'
+                ? { opacity: 0, scale: 0.985, y: '4%' }
+                : { opacity: 0, scale: 1.02, y: '-3%' }
+          }
+          transition={
+            reduceMotion
+              ? { duration: 0 }
+              : { type: 'spring', stiffness: 430, damping: 42, mass: 0.82 }
+          }
+        >
+          {layer === 'jarvis' ? (
+            <JarvisCore
+              today={today}
+              onOpenSpringboard={() => setLayer('springboard')}
+              onRefresh={refresh}
+            />
+          ) : (
+            <Springboard
+              today={today}
+              loading={loadingToday}
+              error={error}
+              userName={user.name}
+              onOpenApp={handleOpenApp}
+              onAskJarvis={() => setLayer('jarvis')}
+              onLogout={handleLogout}
+            />
+          )}
+        </motion.div>
+      </AnimatePresence>
 
-      {openApp && (
-        <AppWindow
-          title={TITLES[openApp]}
-          specialist={SPECIALISTS[openApp]}
-          tabs={tabs}
-          activeTab={activeTab}
-          onTabChange={setTab}
-          onClose={closeApp}
-          onAskJarvis={() => {
-            setOpenApp(null);
-            setLayer('jarvis');
-          }}
-        />
-      )}
+      <AnimatePresence initial={false}>
+        {openApp && (
+          <motion.div
+            key={openApp}
+            className="oj-app-layer"
+            initial={
+              reduceMotion
+                ? false
+                : { opacity: 0, y: '100%', scale: 0.94, borderRadius: 32 }
+            }
+            animate={{ opacity: 1, y: 0, scale: 1, borderRadius: 0 }}
+            exit={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, y: '22%', scale: 0.96, borderRadius: 32 }
+            }
+            transition={
+              reduceMotion
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 390, damping: 38, mass: 0.88 }
+            }
+          >
+            <AppWindow
+              title={TITLES[openApp]}
+              specialist={SPECIALISTS[openApp]}
+              tabs={tabs}
+              activeTab={activeTab}
+              onTabChange={setTab}
+              onClose={closeApp}
+              onAskJarvis={() => {
+                setOpenApp(null);
+                setLayer('jarvis');
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-function buildTabs(app: AppId, currency: string, onChanged: () => void): Tab[] {
+function buildTabs(
+  app: ShellAppId,
+  currency: string,
+  onChanged: () => void,
+): Tab[] {
   switch (app) {
+    case 'connections':
+      return [
+        {
+          id: 'conexoes',
+          label: 'Conexões',
+          render: () => <ConnectionsTab onChanged={onChanged} />,
+        },
+        {
+          id: 'como-funciona',
+          label: 'Como funciona',
+          render: () => <ConnectionsAbout />,
+        },
+      ];
     case 'finance':
       return [
         {

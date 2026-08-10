@@ -148,6 +148,10 @@ export function JarvisCore({
   // where a captured state value would already be stale.
   const voiceRef = useRef<VoiceState | null>(null);
   const busyRef = useRef(false);
+  const queuedQuestionsRef = useRef<string[]>([]);
+  const handleQuestionRef = useRef<(question: string) => Promise<void>>(
+    async () => undefined,
+  );
   const proposalsRef = useRef<JarvisActionProposal[]>([]);
   const resolvingRef = useRef('');
 
@@ -199,7 +203,13 @@ export function JarvisCore({
   const handleQuestion = useCallback(
     async (question: string) => {
       const controls = voiceRef.current;
-      if (!controls || busyRef.current) return;
+      if (!controls) return;
+      if (busyRef.current) {
+        const queue = queuedQuestionsRef.current;
+        if (queue[queue.length - 1] !== question) queue.push(question);
+        if (queue.length > 3) queue.shift();
+        return;
+      }
 
       const decision = voiceProposalDecision(question);
       const pending = proposalsRef.current;
@@ -247,10 +257,15 @@ export function JarvisCore({
         controls.speak(message);
       } finally {
         busyRef.current = false;
+        const queued = queuedQuestionsRef.current.shift();
+        if (queued) {
+          queueMicrotask(() => void handleQuestionRef.current(queued));
+        }
       }
     },
     [onRefresh, resolveProposal],
   );
+  handleQuestionRef.current = handleQuestion;
 
   const voice = useVoice(handleQuestion);
   voiceRef.current = voice;
@@ -544,6 +559,11 @@ export function JarvisCore({
       </header>
 
       <div className="oj-hud-stage">
+        <div className="oj-hud-telemetry" aria-hidden="true">
+          <span>CORE SYNC<br /><strong>100%</strong></span>
+          <span>AGENTS<br /><strong>05 ONLINE</strong></span>
+          <span>VOICE LINK<br /><strong>{tone.label}</strong></span>
+        </div>
         <canvas
           ref={canvasRef}
           className="oj-hud-canvas"
@@ -642,6 +662,22 @@ export function JarvisCore({
             {today.alerts.length === 0 && <span className="oj-chip">Tudo em dia</span>}
           </div>
         )}
+        <div className="oj-voice-mode" role="group" aria-label="Modo de escuta">
+          <button
+            type="button"
+            data-active={voice.listeningMode === 'tap'}
+            onClick={() => voice.setListeningMode('tap')}
+          >
+            TOCAR
+          </button>
+          <button
+            type="button"
+            data-active={voice.listeningMode === 'continuous'}
+            onClick={() => voice.setListeningMode('continuous')}
+          >
+            ESCUTA ATIVA
+          </button>
+        </div>
         <button
           type="button"
           className="oj-hud-mic"
@@ -649,7 +685,15 @@ export function JarvisCore({
           onClick={() => (listening ? voice.stop() : voice.start())}
         >
           {listening ? <Mic size={22} /> : <MicOff size={22} />}
-          <span>{listening ? 'Ouvindo' : 'Tocar para falar'}</span>
+          <span>
+            {listening
+              ? voice.listeningMode === 'continuous'
+                ? 'Escuta ativa'
+                : 'Ouvindo'
+              : voice.listeningMode === 'continuous'
+                ? 'Retomar escuta'
+                : 'Tocar para falar'}
+          </span>
         </button>
       </footer>
     </div>

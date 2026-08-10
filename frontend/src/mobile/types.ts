@@ -7,6 +7,13 @@
 
 export type AppId = 'finance' | 'fitness' | 'routine' | 'family' | 'work';
 
+/**
+ * Apps abríveis pelo shell. `connections` não é um domínio de dados (não tem
+ * tabela nem badge do backend) — é a central de infraestrutura, então vive
+ * fora de `AppId` para não mentir no tipo de `Badges`/`Alert`.
+ */
+export type ShellAppId = AppId | 'connections';
+
 export type Severity = 'critical' | 'warning' | 'info';
 
 export interface LifeUser {
@@ -225,4 +232,65 @@ export interface WorkSummary {
   overdue: WorkTask[];
   due_today: WorkTask[];
   projects: Project[];
+}
+
+// -- Integrações (`/v1/life/integrations`) -----------------------------------
+
+/** Camada 1 do estado: o que este deployment pode oferecer de verdade. */
+export type IntegrationAvailability =
+  | 'available'
+  | 'needs_setup'
+  | 'device_only'
+  | 'coming_soon';
+
+/**
+ * Camada 2: a conexão deste usuário. `pending` não existe aqui — aguardar
+ * autorização é um `pending_auth` separado, nunca um status de conexão.
+ */
+export type IntegrationConnectionStatus =
+  | 'connected'
+  | 'error'
+  | 'expired'
+  | 'revoked';
+
+export interface IntegrationConnection {
+  status: IntegrationConnectionStatus;
+  account_label: string;
+  granted_scopes: string[];
+  connected_at: string | null;
+  last_sync_at: string | null;
+  last_sync_status: 'ok' | 'error' | '';
+  last_error: string;
+  revoked_at: string | null;
+  updated_at: string;
+  /** O backend nunca envia a credencial — apenas se existe uma no cofre. */
+  has_credential: boolean;
+}
+
+export interface IntegrationProvider {
+  id: string;
+  label: string;
+  category: string;
+  description: string;
+  capabilities: string[];
+  scopes: string[];
+  auth: { kind: 'oauth' | 'device' | 'none'; pkce: boolean };
+  availability: IntegrationAvailability;
+  missing_config: string[];
+  prerequisites: string[];
+  icon: string;
+  tint: string;
+  connection: IntegrationConnection | null;
+  pending_auth: { expires_at: string } | null;
+}
+
+export interface IntegrationsSummary {
+  connected: number;
+  attention: number;
+  pending: number;
+}
+
+export interface IntegrationsOverview {
+  providers: IntegrationProvider[];
+  summary: IntegrationsSummary;
 }

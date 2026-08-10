@@ -18,6 +18,7 @@ import type {
   FinanceSummary,
   FitnessSummary,
   Habit,
+  IntegrationsOverview,
   LifeUser,
   RoutineSummary,
   Today,
@@ -250,6 +251,26 @@ export const uncheckHabit = (habitId: string) =>
 
 export const completeTask = (taskId: string) =>
   post<{ task: unknown }>(`/actions/complete-task/${taskId}`);
+
+// -- Integrações -------------------------------------------------------------
+
+export const fetchIntegrations = () => get<IntegrationsOverview>('/integrations');
+
+/**
+ * Inicia a conexão. O backend devolve a URL real de autorização do provedor;
+ * nada fica "conectado" até o callback concluir a troca — o app só deve
+ * redirecionar e, na volta, reler o catálogo.
+ */
+export const connectIntegration = (provider: string) =>
+  post<{ provider: string; authorize_url: string; state: string; expires_at: string }>(
+    `/integrations/${provider}/connect`,
+  );
+
+/** Cancela a autorização pendente e/ou revoga a conexão do provedor. */
+export const disconnectIntegration = (provider: string) =>
+  del<{ provider: string; result: 'revoked' | 'canceled' }>(
+    `/integrations/${provider}`,
+  );
 
 // -- Convenience loaders used by the app screens ----------------------------
 

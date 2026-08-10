@@ -48,6 +48,58 @@ class DatabaseError(RuntimeError):
     """Raised when a database cannot be opened or its driver is missing."""
 
 
+class _BufferedCursor:
+    """Cursor-compatible, already-fetched result for concurrent readers.
+
+    ``Database`` deliberately shares one driver connection across the Life
+    stores.  Returning a live cursor after releasing the connection lock lets
+    another request commit while the first request is still fetching, which
+    can make a valid auth token intermittently look absent on SQLite and can
+    corrupt cursor state on PostgreSQL.  Read results are therefore consumed
+    while the lock is held and exposed through this small cursor facade.
+    """
+
+    def __init__(self, cursor: Any) -> None:
+        self.rowcount = cursor.rowcount
+        self.description = cursor.description
+        self.lastrowid = getattr(cursor, "lastrowid", None)
+        self._rows = list(cursor.fetchall())
+        self._index = 0
+        close = getattr(cursor, "close", None)
+        if callable(close):
+            close()
+
+    def fetchone(self) -> Any:
+        """Return the next buffered row, matching DB-API cursor semantics."""
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchmany(self, size: int = 1) -> list[Any]:
+        """Return at most ``size`` remaining rows."""
+        stop = min(len(self._rows), self._index + max(0, size))
+        rows = self._rows[self._index : stop]
+        self._index = stop
+        return rows
+
+    def fetchall(self) -> list[Any]:
+        """Return every remaining row."""
+        rows = self._rows[self._index :]
+        self._index = len(self._rows)
+        return rows
+
+    def __iter__(self) -> "_BufferedCursor":
+        return self
+
+    def __next__(self) -> Any:
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
+
+
 def detect_backend(target: str) -> str:
     """Classify a connection target as a Postgres DSN or a SQLite path."""
     return POSTGRES if target.startswith(_POSTGRES_SCHEMES) else SQLITE
@@ -222,15 +274,20 @@ class Database:
     def execute(self, sql: str, params: Sequence[Any] = ()) -> Any:
         """Run a statement and return a cursor.
 
-        The cursor supports ``fetchone``, ``fetchall`` and ``rowcount`` on both
+        Row-producing statements are fully buffered before the connection lock
+        is released.  The returned object still supports ``fetchone``,
+        ``fetchmany``, ``fetchall``, iteration and ``rowcount`` on both
         backends, and rows are subscriptable by column name on both.
         """
         with self._lock:
             if self._backend == POSTGRES:
                 cursor = self._conn.cursor()
                 cursor.execute(translate(sql), tuple(params))
-                return cursor
-            return self._conn.execute(sql, tuple(params))
+            else:
+                cursor = self._conn.execute(sql, tuple(params))
+            if cursor.description is not None:
+                return _BufferedCursor(cursor)
+            return cursor
 
     def executemany(self, sql: str, seq: Iterable[Sequence[Any]]) -> Any:
         """Run a statement once per parameter tuple."""

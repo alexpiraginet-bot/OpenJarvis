@@ -27,7 +27,10 @@ from typing import TYPE_CHECKING, Dict, Tuple
 if TYPE_CHECKING:
     from openjarvis.life.db import Database
 
-CURRENT_SCHEMA_VERSION = 1
+# v2: tabelas do hub de integrações. O bump é o que faz um Postgres já em v1
+# reexecutar o DDL idempotente (ensure_schema retorna cedo quando a versão
+# gravada é a atual) e criar as tabelas novas.
+CURRENT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +350,54 @@ CREATE TABLE IF NOT EXISTS jarvis_ai_cost_events (
 );
 """
 
+# -- Integrações -------------------------------------------------------------
+
+# Fora de SCHEMA de propósito, como as tabelas do Jarvis acima: conexão com um
+# provedor é control-plane e jamais pode ser criada ou alterada pelo CRUD
+# genérico. ``credential_ref`` guarda apenas uma referência opaca para um cofre
+# externo — não existe coluna onde um token em texto claro possa viver.
+_DDL_INTEGRATION_CONNECTIONS = """\
+CREATE TABLE IF NOT EXISTS integration_connections (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT NOT NULL,
+    provider         TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'connected',
+    granted_scopes   TEXT NOT NULL DEFAULT '[]',
+    account_label    TEXT NOT NULL DEFAULT '',
+    credential_ref   TEXT NOT NULL DEFAULT '',
+    connected_at     TEXT,
+    last_sync_at     TEXT,
+    last_sync_status TEXT NOT NULL DEFAULT '',
+    last_error       TEXT NOT NULL DEFAULT '',
+    revoked_at       TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    UNIQUE (user_id, provider)
+);
+"""
+
+# O ``state`` do OAuth volta por um callback não autenticado, então é esta
+# linha que nomeia o usuário — e só o hash fica gravado, como em auth_tokens.
+# O ``code_verifier`` PKCE precisa sobreviver até a troca do code; sozinho ele
+# não concede nada, e a linha expira em minutos. UNIQUE (user_id, provider) é
+# o que garante "uma intenção viva por provedor" também entre instâncias
+# concorrentes — dentro de um processo o lock já serializa, entre processos
+# só a constraint segura.
+_DDL_INTEGRATION_AUTH_REQUESTS = """\
+CREATE TABLE IF NOT EXISTS integration_auth_requests (
+    id            TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    state_hash    TEXT NOT NULL UNIQUE,
+    code_verifier TEXT NOT NULL DEFAULT '',
+    redirect_uri  TEXT NOT NULL DEFAULT '',
+    scopes        TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    UNIQUE (user_id, provider)
+);
+"""
+
 _ALL_DDL = (
     _DDL_SCHEMA_MIGRATIONS,
     _DDL_USERS,
@@ -369,6 +420,8 @@ _ALL_DDL = (
     _DDL_WORK_TASKS,
     _DDL_JARVIS_ACTION_PROPOSALS,
     _DDL_JARVIS_AI_COST_EVENTS,
+    _DDL_INTEGRATION_CONNECTIONS,
+    _DDL_INTEGRATION_AUTH_REQUESTS,
 )
 
 # Every index leads with user_id: the tenant predicate is present in *every*
@@ -402,6 +455,8 @@ _INDEXES = (
     " ON jarvis_action_proposals (user_id, status, created_at);",
     "CREATE INDEX IF NOT EXISTS idx_jarvis_cost_month_status"
     " ON jarvis_ai_cost_events (month, status, expires_at);",
+    "CREATE INDEX IF NOT EXISTS idx_integration_conn_user"
+    " ON integration_connections (user_id);",
 )
 
 
@@ -520,6 +575,7 @@ def ensure_schema(db: "Database") -> None:
     AUTOINCREMENT, no SERIAL — so one definition serves both backends.
     """
     sqlite_version = 0
+    postgres_version = 0
     if db.backend == "sqlite":
         row = db.execute("PRAGMA user_version").fetchone()
         sqlite_version = int(row[0]) if row else 0
@@ -553,11 +609,10 @@ def ensure_schema(db: "Database") -> None:
         # tables directly. Generic PostgreSQL installs may not define the
         # Supabase roles; in that case there is nothing to revoke.
         role_rows = db.execute(
-            "SELECT rolname FROM pg_roles"
-            " WHERE rolname IN ('anon', 'authenticated')"
+            "SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')"
         ).fetchall()
         roles = tuple(str(row["rolname"]) for row in role_rows)
-        protected_tables = (
+        all_protected_tables = (
             "life_schema_migrations",
             "users",
             "auth_tokens",
@@ -566,6 +621,19 @@ def ensure_schema(db: "Database") -> None:
             *SCHEMA,
             "jarvis_action_proposals",
             "jarvis_ai_cost_events",
+            "integration_connections",
+            "integration_auth_requests",
+        )
+        # A v1 database already applied RLS and revokes to every existing
+        # table. Re-running ALTER TABLE across the entire live schema needs
+        # exclusive locks and can exceed a serverless statement timeout while
+        # normal requests are active. The v1 -> v2 migration therefore locks
+        # only the two tables introduced by v2; a fresh database still secures
+        # the complete schema.
+        protected_tables = (
+            all_protected_tables
+            if postgres_version == 0
+            else ("integration_connections", "integration_auth_requests")
         )
         security_statements = []
         for table in protected_tables:

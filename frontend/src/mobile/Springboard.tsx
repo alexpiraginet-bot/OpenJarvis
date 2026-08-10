@@ -14,36 +14,58 @@ import {
   Heart,
   LogOut,
   Repeat,
+  Satellite,
   Wallet,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
-import type { AppId, Today } from './types';
+import { ConnectionsPanel } from './apps/ConnectionsApp';
+import type { AppId, ShellAppId, Today } from './types';
 import { Empty, formatLongDate, formatMoney, Spinner } from './ui';
 
-const ICONS: Record<AppId, ComponentType<{ size?: number; color?: string }>> = {
+const ICONS: Record<ShellAppId, ComponentType<{ size?: number; color?: string }>> = {
   finance: Wallet,
   fitness: Dumbbell,
   routine: Repeat,
   family: Heart,
   work: Briefcase,
+  connections: Satellite,
 };
 
-const LABELS: Record<AppId, string> = {
+const LABELS: Record<ShellAppId, string> = {
   finance: 'Finanças',
   fitness: 'Treino',
   routine: 'Rotina',
   family: 'Família',
   work: 'Trabalho',
+  connections: 'Conexões',
 };
 
 const ORDER: AppId[] = ['finance', 'fitness', 'routine', 'family', 'work'];
+const ORBIT_ORDER: ShellAppId[] = [
+  'work',
+  'fitness',
+  'routine',
+  'connections',
+  'finance',
+  'family',
+];
 
-const SPECIALISTS: Record<AppId, string> = {
+const SPECIALISTS: Record<ShellAppId, string> = {
   finance: 'Diretor financeiro',
   fitness: 'Coach de performance',
   routine: 'Chefe de gabinete',
   family: 'Concierge familiar',
   work: 'Assistente executivo',
+  connections: 'Engenheiro de integrações',
+};
+
+const ORBIT_CODES: Record<ShellAppId, string> = {
+  finance: 'FN-01',
+  fitness: 'PF-02',
+  routine: 'RT-03',
+  family: 'FM-04',
+  work: 'EX-05',
+  connections: 'NX-06',
 };
 
 /** How many alerts stay visible below the orbital system. */
@@ -62,7 +84,7 @@ export function Springboard({
   loading: boolean;
   error: string;
   userName: string;
-  onOpenApp: (app: AppId) => void;
+  onOpenApp: (app: ShellAppId) => void;
   onAskJarvis: () => void;
   onLogout: () => void;
 }) {
@@ -104,7 +126,7 @@ export function Springboard({
           </div>
           <div className="oj-system-metric">
             <span>ESPECIALISTAS</span>
-            <strong>05</strong>
+            <strong>{String(ORDER.length).padStart(2, '0')}</strong>
           </div>
           <div className="oj-system-metric oj-system-metric--online">
             <span>NÚCLEO</span>
@@ -112,9 +134,61 @@ export function Springboard({
           </div>
         </section>
 
+        {today && (
+          <section className="oj-life-overview" aria-label="Visão 360 da sua vida">
+            <div className="oj-life-overview-head">
+              <span>Visão 360</span>
+              <small>dados de hoje</small>
+            </div>
+            <div className="oj-life-overview-track">
+              <button type="button" onClick={() => onOpenApp('finance')}>
+                <span><Wallet size={15} /> Finanças</span>
+                <strong>{formatMoney(today.finance.balance_cents, today.currency)}</strong>
+                <small>{formatMoney(today.finance.expense_cents, today.currency)} em saídas</small>
+              </button>
+              <button type="button" onClick={() => onOpenApp('fitness')}>
+                <span><Dumbbell size={15} /> Treino</span>
+                <strong>
+                  {today.fitness.todays_workout?.name ??
+                    `${today.fitness.week_completed}/${today.fitness.week_planned} concluídos`}
+                </strong>
+                <small>
+                  {today.fitness.todays_workout
+                    ? 'planejado para hoje'
+                    : 'progresso da semana'}
+                </small>
+              </button>
+              <button type="button" onClick={() => onOpenApp('routine')}>
+                <span><Repeat size={15} /> Rotina</span>
+                <strong>{today.routine.completed}/{today.routine.total}</strong>
+                <small>hábitos concluídos hoje</small>
+              </button>
+              <button type="button" onClick={() => onOpenApp('work')}>
+                <span><Briefcase size={15} /> Trabalho</span>
+                <strong>{today.work.due_today_count}</strong>
+                <small>{today.work.open_count} tarefas abertas</small>
+              </button>
+              <button type="button" onClick={() => onOpenApp('family')}>
+                <span><Heart size={15} /> Família</span>
+                <strong>{today.family.upcoming[0]?.title ?? 'Tudo alinhado'}</strong>
+                <small>
+                  {today.family.upcoming[0]
+                    ? today.family.upcoming[0].days_away === 0
+                      ? 'acontece hoje'
+                      : `em ${today.family.upcoming[0].days_away} dia(s)`
+                    : 'nenhum evento próximo'}
+                </small>
+              </button>
+            </div>
+          </section>
+        )}
+
         <nav className="oj-orbit" aria-label="Aplicativos conectados ao Jarvis">
           <span className="oj-orbit-track oj-orbit-track--outer" aria-hidden="true" />
+          <span className="oj-orbit-track oj-orbit-track--mid" aria-hidden="true" />
           <span className="oj-orbit-track oj-orbit-track--inner" aria-hidden="true" />
+          <span className="oj-orbit-crosshair" aria-hidden="true" />
+          <span className="oj-orbit-sweep" aria-hidden="true" />
 
           <button
             type="button"
@@ -123,15 +197,16 @@ export function Springboard({
             aria-label="Conversar com o Jarvis"
           >
             <img src="/aether-neural-core.png" alt="" />
-              <span className="oj-orbit-core-label">
-                <strong>JARVIS</strong>
-                <small>NEURAL CORE</small>
-              </span>
+            <span className="oj-orbit-core-pulse" aria-hidden="true" />
+            <span className="oj-orbit-core-label">
+              <strong>JARVIS</strong>
+              <small>NEURAL CORE</small>
+            </span>
           </button>
 
-          {ORDER.map((app) => {
+          {ORBIT_ORDER.map((app) => {
             const Icon = ICONS[app];
-            const badge = today?.badges?.[app] ?? 0;
+            const badge = app === 'connections' ? 0 : (today?.badges?.[app] ?? 0);
             return (
               <button
                 key={app}
@@ -145,7 +220,10 @@ export function Springboard({
                 }
               >
                 <span className="oj-orbit-node">
-                  <Icon size={24} />
+                  <Icon size={26} />
+                  <span className="oj-orbit-code" aria-hidden="true">
+                    {ORBIT_CODES[app]}
+                  </span>
                   {badge > 0 && (
                     <span className="oj-badge">{badge > 99 ? '99+' : badge}</span>
                   )}
@@ -160,7 +238,7 @@ export function Springboard({
         <section className="oj-specialist-panel" aria-label="Conselho de especialistas">
           <div className="oj-panel-heading">
             <span><BrainCircuit size={15} /> Conselho Jarvis</span>
-            <small>5 agentes conectados</small>
+            <small>{ORDER.length} especialistas ativos</small>
           </div>
           <div className="oj-specialist-list">
             {ORDER.map((app) => {
@@ -184,6 +262,11 @@ export function Springboard({
             })}
           </div>
         </section>
+
+        <ConnectionsPanel
+          onOpen={() => onOpenApp('connections')}
+          refreshSignal={today}
+        />
 
         <section className="oj-widget" aria-label="Resumo de hoje">
           <div className="oj-widget-title">

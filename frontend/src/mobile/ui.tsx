@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 // -- Formatting --------------------------------------------------------------
 
@@ -254,7 +255,7 @@ export function Sheet({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  return (
+  const sheet = (
     <div
       className="oj-sheet-backdrop"
       role="presentation"
@@ -269,6 +270,14 @@ export function Sheet({
       </div>
     </div>
   );
+
+  // Tab transitions use transform/filter, which turn the animated tab into a
+  // containing block. Portal the sheet to the app window so `inset: 0` is
+  // anchored to the visible phone viewport instead of the tab's content
+  // height; otherwise long screens can push the sheet below the home bar.
+  const host =
+    typeof document === 'undefined' ? null : document.querySelector('.oj-window');
+  return host ? createPortal(sheet, host) : sheet;
 }
 
 /**

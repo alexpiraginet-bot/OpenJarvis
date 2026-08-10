@@ -45,6 +45,8 @@ from openjarvis.life.schema import APPS, SCHEMA
 from openjarvis.life.service import LifeServiceError, today_in
 from openjarvis.life.store import Filter, LifeStoreError
 from openjarvis.life.tenancy import AuthError, User
+from openjarvis.server.life_integrations_routes import create_integrations_router
+from openjarvis.server.life_voice_routes import create_voice_router
 
 #: Query parameters that control the query itself rather than filtering it.
 _CONTROL_PARAMS = frozenset({"order_by", "desc", "limit", "offset"})
@@ -720,6 +722,11 @@ def create_life_router(db_path: str = "") -> APIRouter:
         except LifeServiceError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"task": task}
+
+    # O hub de integrações compartilha o mesmo contexto (e o mesmo bearer de
+    # usuário), mas vive num módulo próprio para o router principal não crescer.
+    router.include_router(create_integrations_router(life))
+    router.include_router(create_voice_router(life))
 
     # Exposed so the app can hand the same context to agent tools (and so
     # tests can seed data without reaching for the database path).

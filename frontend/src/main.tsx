@@ -1,16 +1,15 @@
-import { StrictMode } from 'react';
+import { lazy, StrictMode, Suspense, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import '@fontsource-variable/geist';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import App from './App';
-import MobileApp from './mobile/MobileApp';
-import { initApiBase } from './lib/api';
-import { initAnalytics } from './lib/analytics';
 import './index.css';
 
+const OperatorApp = lazy(() => import('./App'));
+const MobileApp = lazy(() => import('./mobile/MobileApp'));
+
 /**
- * The client app and the operator console are two products sharing one bundle.
+ * The client app and the operator console are two products sharing one build.
  *
  * Splitting them at the root rather than at a route matters: `App` mounts the
  * research console's chrome — the telemetry opt-in modal, the update checker,
@@ -41,17 +40,13 @@ applyTheme();
 // Fetch the API base URL from the Tauri backend before rendering.
 // This ensures JARVIS_PORT is defined in one place (the Rust backend).
 // In non-Tauri environments this is a no-op.
-function mount() {
+function mount(content: ReactNode) {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary>
-        {isClientApp ? (
-          <MobileApp />
-        ) : (
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
-        )}
+        <Suspense fallback={<div className="oj-boot" aria-label="Carregando" />}>
+          {content}
+        </Suspense>
       </ErrorBoundary>
     </StrictMode>,
   );
@@ -62,12 +57,22 @@ if (isClientApp) {
   // relative paths, and a personal-assistant install is not a research
   // datapoint. Mounting straight away also removes a network round trip from
   // the phone's cold start.
-  mount();
+  mount(<MobileApp />);
 } else {
-  initApiBase().finally(() => {
-    // Kick off analytics init in the background — it's never awaited so
-    // a slow/failed identity fetch never delays UI render.
-    void initAnalytics();
-    mount();
-  });
+  // The operator console is a separate lazy chunk. None of its dashboards,
+  // charting, markdown or analytics code is downloaded by the iPhone app.
+  void Promise.all([import('./lib/api'), import('./lib/analytics')]).then(
+    ([{ initApiBase }, { initAnalytics }]) => {
+      initApiBase().finally(() => {
+        // Kick off analytics init in the background — it's never awaited so
+        // a slow/failed identity fetch never delays UI render.
+        void initAnalytics();
+        mount(
+          <BrowserRouter>
+            <OperatorApp />
+          </BrowserRouter>,
+        );
+      });
+    },
+  );
 }

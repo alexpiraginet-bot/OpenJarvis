@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { synthesizeJarvisVoice } from './voiceApi';
 
 /** Minimal shape of the Web Speech API — absent from lib.dom in this TS version. */
 interface SpeechRecognitionAlternativeLike {
@@ -81,6 +82,7 @@ function getNativeVoiceHandler(): NativeVoiceHandler | null {
 }
 
 export type VoiceStatus = 'idle' | 'listening' | 'thinking' | 'speaking' | 'denied';
+export type VoiceListeningMode = 'tap' | 'continuous';
 
 export interface VoiceState {
   status: VoiceStatus;
@@ -99,20 +101,70 @@ export interface VoiceState {
   interim: string;
   error: string;
   supported: boolean;
+  listeningMode: VoiceListeningMode;
   start: () => void;
   stop: () => void;
   speak: (text: string) => void;
+  setListeningMode: (mode: VoiceListeningMode) => void;
   setStatus: (status: VoiceStatus) => void;
   reset: () => void;
 }
 
 const BIN_COUNT = 64;
+const ENVELOPE_FPS = 30;
+const LISTENING_MODE_KEY = 'oj-life-listening-mode';
+
+function storedListeningMode(): VoiceListeningMode {
+  try {
+    return localStorage.getItem(LISTENING_MODE_KEY) === 'continuous'
+      ? 'continuous'
+      : 'tap';
+  } catch {
+    return 'tap';
+  }
+}
+
+async function buildVoiceEnvelope(audio: Blob): Promise<Uint8Array> {
+  const AudioCtor =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioCtor) return new Uint8Array();
+
+  const context = new AudioCtor();
+  try {
+    const buffer = await context.decodeAudioData(await audio.arrayBuffer());
+    const channel = buffer.getChannelData(0);
+    const samplesPerFrame = Math.max(
+      1,
+      Math.floor(buffer.sampleRate / ENVELOPE_FPS),
+    );
+    const envelope = new Uint8Array(
+      Math.max(1, Math.ceil(channel.length / samplesPerFrame)),
+    );
+    for (let frame = 0; frame < envelope.length; frame += 1) {
+      const start = frame * samplesPerFrame;
+      const end = Math.min(channel.length, start + samplesPerFrame);
+      let sumSquares = 0;
+      for (let index = start; index < end; index += 1) {
+        sumSquares += channel[index] * channel[index];
+      }
+      const rms = Math.sqrt(sumSquares / Math.max(1, end - start));
+      envelope[frame] = Math.round(Math.min(1, rms * 7.5) * 255);
+    }
+    return envelope;
+  } finally {
+    void context.close().catch(() => undefined);
+  }
+}
 
 export function useVoice(onFinalTranscript: (text: string) => void): VoiceState {
   const [status, setStatus] = useState<VoiceStatus>('idle');
   const [transcript, setTranscript] = useState('');
   const [interim, setInterim] = useState('');
   const [error, setError] = useState('');
+  const [listeningMode, setListeningModeState] =
+    useState<VoiceListeningMode>(storedListeningMode);
 
   const levelRef = useRef(0);
   const spectrumRef = useRef<Uint8Array>(new Uint8Array(BIN_COUNT));
@@ -121,7 +173,12 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const frameRef = useRef(0);
+  const playbackFrameRef = useRef(0);
+  const playbackRef = useRef<HTMLAudioElement | null>(null);
+  const playbackUrlRef = useRef('');
+  const voiceRequestRef = useRef<AbortController | null>(null);
   const wantListeningRef = useRef(false);
+  const continuousRef = useRef(listeningMode === 'continuous');
   // Kept in a ref so the recognition callback never closes over a stale
   // handler — recognition instances outlive a render.
   const onFinalRef = useRef(onFinalTranscript);
@@ -151,6 +208,17 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
           levelRef.current = 0;
           spectrumRef.current = new Uint8Array(BIN_COUNT);
         }
+        if (
+          detail.state === 'idle' &&
+          continuousRef.current &&
+          wantListeningRef.current
+        ) {
+          requestAnimationFrame(() => {
+            if (continuousRef.current && wantListeningRef.current) {
+              getNativeVoiceHandler()?.postMessage({ action: 'start' });
+            }
+          });
+        }
         return;
       }
 
@@ -168,7 +236,7 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
       if (detail.type === 'transcript' && detail.text?.trim()) {
         const text = detail.text.trim();
         if (detail.final) {
-          wantListeningRef.current = false;
+          wantListeningRef.current = continuousRef.current;
           setTranscript(text);
           setInterim('');
           onFinalRef.current(text);
@@ -189,6 +257,28 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     void audioContextRef.current?.close().catch(() => undefined);
     audioContextRef.current = null;
     analyserRef.current = null;
+    levelRef.current = 0;
+    spectrumRef.current = new Uint8Array(BIN_COUNT);
+  }, []);
+
+  const cancelRemoteSpeech = useCallback(() => {
+    voiceRequestRef.current?.abort();
+    voiceRequestRef.current = null;
+    cancelAnimationFrame(playbackFrameRef.current);
+    playbackFrameRef.current = 0;
+
+    const playback = playbackRef.current;
+    playbackRef.current = null;
+    if (playback) {
+      playback.onplay = null;
+      playback.onended = null;
+      playback.onerror = null;
+      playback.pause();
+    }
+    if (playbackUrlRef.current) {
+      URL.revokeObjectURL(playbackUrlRef.current);
+      playbackUrlRef.current = '';
+    }
     levelRef.current = 0;
     spectrumRef.current = new Uint8Array(BIN_COUNT);
   }, []);
@@ -232,6 +322,7 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
   const start = useCallback(() => {
     setError('');
     wantListeningRef.current = true;
+    cancelRemoteSpeech();
     window.speechSynthesis?.cancel();
 
     const nativeVoice = getNativeVoiceHandler();
@@ -280,7 +371,7 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
       }
       setInterim(pending);
       if (finalText.trim()) {
-        wantListeningRef.current = false;
+        wantListeningRef.current = continuousRef.current;
         recognition.stop();
         recognitionRef.current = null;
         teardownAudio();
@@ -327,10 +418,11 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     } catch {
       /* start() throws if called twice — harmless */
     }
-  }, [startAudio, teardownAudio]);
+  }, [cancelRemoteSpeech, startAudio, teardownAudio]);
 
   const stop = useCallback(() => {
     wantListeningRef.current = false;
+    cancelRemoteSpeech();
     getNativeVoiceHandler()?.postMessage({ action: 'stop' });
     recognitionRef.current?.stop();
     recognitionRef.current = null;
@@ -338,27 +430,130 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     setInterim('');
     setError('');
     setStatus('idle');
-  }, [teardownAudio]);
+  }, [cancelRemoteSpeech, teardownAudio]);
+
+  const setListeningMode = useCallback(
+    (mode: VoiceListeningMode) => {
+      continuousRef.current = mode === 'continuous';
+      setListeningModeState(mode);
+      try {
+        localStorage.setItem(LISTENING_MODE_KEY, mode);
+      } catch {
+        /* Private browsing may not persist the preference. */
+      }
+      if (mode === 'continuous') start();
+      else stop();
+    },
+    [start, stop],
+  );
 
   const speak = useCallback((text: string) => {
     if (!text) return;
-    const nativeVoice = getNativeVoiceHandler();
-    if (nativeVoice) {
+    cancelRemoteSpeech();
+
+    const speakLocally = () => {
+      const nativeVoice = getNativeVoiceHandler();
+      if (nativeVoice) {
+        setStatus('speaking');
+        nativeVoice.postMessage({ action: 'speak', text });
+        return;
+      }
+      if (typeof window.speechSynthesis === 'undefined') {
+        setStatus('idle');
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'pt-BR';
+      utterance.rate = 1.02;
+      utterance.onend = () => {
+        if (continuousRef.current && wantListeningRef.current) start();
+        else setStatus('idle');
+      };
       setStatus('speaking');
-      nativeVoice.postMessage({ action: 'speak', text });
-      return;
-    }
-    if (typeof window.speechSynthesis === 'undefined') return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'pt-BR';
-    utterance.rate = 1.02;
-    utterance.onend = () => {
-      setStatus(wantListeningRef.current ? 'listening' : 'idle');
+      window.speechSynthesis.speak(utterance);
     };
-    setStatus('speaking');
-    window.speechSynthesis.speak(utterance);
-  }, []);
+
+    const controller = new AbortController();
+    voiceRequestRef.current = controller;
+
+    void synthesizeJarvisVoice(text, controller.signal)
+      .then(async (audioBlob) => {
+        if (voiceRequestRef.current !== controller || controller.signal.aborted) {
+          return;
+        }
+        voiceRequestRef.current = null;
+
+        const envelopePromise = buildVoiceEnvelope(audioBlob).catch(
+          () => new Uint8Array(),
+        );
+        const url = URL.createObjectURL(audioBlob);
+        const playback = new Audio(url);
+        playback.preload = 'auto';
+        playbackRef.current = playback;
+        playbackUrlRef.current = url;
+
+        let envelope = new Uint8Array();
+        void envelopePromise.then((decoded) => {
+          envelope = decoded;
+        });
+
+        const animate = () => {
+          if (playbackRef.current !== playback || playback.paused) return;
+          const frame = Math.min(
+            envelope.length - 1,
+            Math.max(0, Math.floor(playback.currentTime * ENVELOPE_FPS)),
+          );
+          const level = envelope.length ? envelope[frame] / 255 : 0.12;
+          levelRef.current = level;
+          spectrumRef.current = Uint8Array.from(
+            { length: BIN_COUNT },
+            (_, index) =>
+              Math.round(
+                Math.min(1, level * (0.72 + 0.28 * Math.sin(index * 0.61))) *
+                  255,
+              ),
+          );
+          playbackFrameRef.current = requestAnimationFrame(animate);
+        };
+
+        const finish = () => {
+          if (playbackRef.current !== playback) return;
+          const resume = continuousRef.current && wantListeningRef.current;
+          cancelRemoteSpeech();
+          if (resume) start();
+          else setStatus('idle');
+        };
+        playback.onplay = () => {
+          setStatus('speaking');
+          playbackFrameRef.current = requestAnimationFrame(animate);
+        };
+        playback.onended = finish;
+        playback.onerror = () => {
+          if (playbackRef.current !== playback) return;
+          cancelRemoteSpeech();
+          speakLocally();
+        };
+
+        try {
+          await playback.play();
+        } catch {
+          if (playbackRef.current !== playback) return;
+          cancelRemoteSpeech();
+          speakLocally();
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        logger(
+          `OpenAI voice fallback: ${error instanceof Error ? error.name : 'unknown'}`,
+        );
+        if (voiceRequestRef.current === controller) {
+          voiceRequestRef.current = null;
+        }
+        speakLocally();
+      });
+  }, [cancelRemoteSpeech, start]);
 
   const reset = useCallback(() => {
     setTranscript('');
@@ -371,10 +566,11 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
       wantListeningRef.current = false;
       recognitionRef.current?.abort();
       recognitionRef.current = null;
+      cancelRemoteSpeech();
       teardownAudio();
       window.speechSynthesis?.cancel();
     },
-    [teardownAudio],
+    [cancelRemoteSpeech, teardownAudio],
   );
 
   return {
@@ -385,9 +581,11 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     interim,
     error,
     supported,
+    listeningMode,
     start,
     stop,
     speak,
+    setListeningMode,
     setStatus,
     reset,
   };
