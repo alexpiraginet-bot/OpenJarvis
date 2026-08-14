@@ -13,9 +13,12 @@ e fail-closed por construção.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -25,16 +28,23 @@ from openjarvis.life.app_attest import (
     AppAttestError,
     AppAttestStore,
 )
+from openjarvis.life.integration_sync import (
+    IntegrationSyncError,
+    IntegrationSyncService,
+)
 from openjarvis.life.integrations import (
     PROVIDERS,
     CredentialVault,
+    IntegrationAuthError,
     IntegrationsError,
     IntegrationsStore,
     IntegrationUnavailableError,
     UnknownProviderError,
 )
+from openjarvis.life.oauth_providers import OAuthProviderClient
 from openjarvis.life.tenancy import User
 
+logger = logging.getLogger(__name__)
 _bearer = HTTPBearer(auto_error=False)
 _APPLE_CALENDAR_SCOPES = frozenset({"events.read", "events.write"})
 
@@ -96,6 +106,7 @@ def create_integrations_router(
     *,
     vault: Optional[CredentialVault] = None,
     app_attest: Optional[AppAttestStore] = None,
+    oauth_client: Optional[OAuthProviderClient] = None,
 ) -> APIRouter:
     """Monta as rotas de integrações sobre um contexto Life já aberto.
 
@@ -104,7 +115,16 @@ def create_integrations_router(
     credencial tem onde ser guardada até um cofre real ser configurado.
     """
     router = APIRouter(tags=["life-integrations"])
-    integrations = IntegrationsStore(life, vault=vault)
+    integrations = IntegrationsStore(
+        life,
+        vault=vault,
+        oauth_callback_available=vault is not None and oauth_client is not None,
+    )
+    sync_service = (
+        IntegrationSyncService(life, vault, oauth_client)
+        if vault is not None and oauth_client is not None
+        else None
+    )
     attest = app_attest or AppAttestStore(life)
 
     def current_user(
@@ -189,7 +209,7 @@ def create_integrations_router(
         """Inicia a conexão: devolve a URL real de autorização, ou o motivo.
 
         Iniciar nunca conecta nada — o catálogo continua mostrando a conexão
-        como inexistente até o callback (futuro) concluir a troca de código.
+        como inexistente até o callback concluir a troca de código.
         """
         try:
             return integrations.begin_authorization(user.id, provider)
@@ -197,6 +217,56 @@ def create_integrations_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except IntegrationUnavailableError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    def callback_redirect(provider: str, status: str) -> RedirectResponse:
+        safe_provider = provider if provider in PROVIDERS else "unknown"
+        query = urlencode({"integration": safe_provider, "status": status})
+        return RedirectResponse(url=f"/vida?{query}", status_code=303)
+
+    @router.get("/integrations/{provider}/callback")
+    def oauth_callback(
+        provider: str,
+        code: str = Query(default="", max_length=4096),
+        state: str = Query(default="", max_length=512),
+        error: str = Query(default="", max_length=256),
+    ) -> RedirectResponse:
+        """Finish OAuth server-side and return to the single-screen Life shell."""
+        if error:
+            if state:
+                try:
+                    integrations.discard_authorization(state, provider)
+                except IntegrationsError:
+                    pass
+            return callback_redirect(provider, "error")
+        if not state or not code or oauth_client is None:
+            return callback_redirect(provider, "error")
+        try:
+            context = integrations.authorization_context(state, provider)
+            credential = oauth_client.exchange(context, code)
+            if not set(context.requested_scopes).issubset(credential.granted_scopes):
+                raise IntegrationAuthError(
+                    "O provedor não concedeu todos os escopos necessários."
+                )
+            integrations.complete_authorization(
+                state,
+                granted_scopes=credential.granted_scopes,
+                account_label=credential.account_label,
+                credential_payload=credential.to_vault_payload(),
+            )
+        except IntegrationsError:
+            try:
+                integrations.discard_authorization(state, provider)
+            except IntegrationsError:
+                pass
+            return callback_redirect(provider, "error")
+        except Exception:  # noqa: BLE001 - callback must not leak provider details
+            logger.exception("Unexpected OAuth callback failure for %s", provider)
+            try:
+                integrations.discard_authorization(state, provider)
+            except IntegrationsError:
+                pass
+            return callback_redirect(provider, "error")
+        return callback_redirect(provider, "connected")
 
     @router.post("/integrations/{provider}/device-grant", status_code=201)
     async def register_device_grant(
@@ -258,6 +328,27 @@ def create_integrations_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"provider": provider, "connection": connection}
 
+    @router.post("/integrations/{provider}/sync")
+    def sync_provider(
+        provider: str,
+        user: User = Depends(current_user),
+    ) -> Dict[str, Any]:
+        """Synchronize one connected provider into bounded tenant records."""
+        if sync_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail="A sincronização OAuth não está configurada neste servidor.",
+            )
+        try:
+            return sync_service.sync(user.id, provider)
+        except UnknownProviderError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except IntegrationSyncError as exc:
+            status_code = (
+                502 if exc.reason in {"internal_error", "provider_error"} else 409
+            )
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
     @router.delete("/integrations/{provider}")
     async def disconnect(
         provider: str, user: User = Depends(current_user)
@@ -274,6 +365,7 @@ def create_integrations_router(
             )
         return {"provider": provider, "result": result}
 
-    # Exposto para testes e para o wiring futuro (callback OAuth, iOS bridge).
+    # Exposto para testes e para o wiring nativo do iOS.
     router.integrations_store = integrations  # type: ignore[attr-defined]
+    router.integration_sync_service = sync_service  # type: ignore[attr-defined]
     return router

@@ -125,10 +125,9 @@ class TestCloudEngineGenerate:
 class TestOpenAIUnsupportedTemperatureRetry:
     """Regression for #426.
 
-    Some OpenAI models (e.g. gpt-5) reject a non-default ``temperature``
-    with HTTP 400 ``unsupported_value``. A brand-new install defaults to
-    such a model, so the very first prompt 400s. The engine must detect
-    this specific error and retry once without ``temperature``.
+    Known reasoning models already omit ``temperature`` proactively. This
+    fallback covers a newly released alias that rejects the parameter before
+    OpenJarvis has classified it, returning HTTP 400 ``unsupported_value``.
     """
 
     def _fake_resp(self):
@@ -173,7 +172,7 @@ class TestOpenAIUnsupportedTemperatureRetry:
 
         result = engine.generate(
             [Message(role=Role.USER, content="Hi")],
-            model="gpt-5",
+            model="gpt-future-default-temperature",
             temperature=0.7,
         )
         # The call succeeded via the retry.

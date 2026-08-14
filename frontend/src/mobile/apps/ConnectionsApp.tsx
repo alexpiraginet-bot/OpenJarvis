@@ -23,6 +23,7 @@ import {
   Mail,
   MessageCircle,
   Plug,
+  RefreshCw,
   Satellite,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
@@ -36,6 +37,7 @@ import {
   linkWhatsApp,
   revokeWhatsApp,
   saveWhatsAppBriefing,
+  syncIntegration,
 } from '../api';
 import {
   clearCurrentAccountNativeCalendarReceiptCache,
@@ -290,6 +292,31 @@ export function showGenericDisconnect(provider: IntegrationProvider): boolean {
   );
 }
 
+export function canSyncProvider(provider: IntegrationProvider): boolean {
+  return Boolean(
+    provider.auth.kind === 'oauth' &&
+      provider.connection?.status === 'connected' &&
+      provider.connection.has_credential,
+  );
+}
+
+export interface IntegrationCallbackState {
+  provider: string;
+  status: 'connected' | 'error';
+}
+
+/** Read only the bounded callback signal emitted by our own OAuth endpoint. */
+export function parseIntegrationCallback(
+  search: string,
+): IntegrationCallbackState | null {
+  const params = new URLSearchParams(search);
+  const provider = params.get('integration') ?? '';
+  const status = params.get('status') ?? '';
+  if (!/^[a-z][a-z0-9_]{1,39}$/.test(provider)) return null;
+  if (status !== 'connected' && status !== 'error') return null;
+  return { provider, status };
+}
+
 export async function disconnectProvider(
   provider: IntegrationProvider,
   disconnect: typeof disconnectIntegration = disconnectIntegration,
@@ -378,11 +405,32 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
   const overview = useLoader(fetchIntegrations);
   const [selectedId, setSelectedId] = useState('');
   const [busy, setBusy] = useState('');
+  const [busyAction, setBusyAction] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   const providers = overview.data?.providers ?? [];
   const selected = providers.find((provider) => provider.id === selectedId) ?? null;
+
+  useEffect(() => {
+    const callback = parseIntegrationCallback(window.location.search);
+    if (!callback) return;
+    setSelectedId(callback.provider);
+    if (callback.status === 'connected') {
+      setNotice('Conexão autorizada. Sincronize agora para atualizar o Jarvis.');
+    } else {
+      setError('A autorização não foi concluída. Tente conectar novamente.');
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete('integration');
+    url.searchParams.delete('status');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, []);
 
   function closeSheet() {
     setSelectedId('');
@@ -391,13 +439,16 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
 
   async function handleConnect(provider: IntegrationProvider) {
     setBusy(provider.id);
+    setBusyAction('connect');
     setError('');
+    setNotice('');
     try {
       if (provider.auth.kind === 'device') {
         await connectNativeCalendar(provider.id);
         overview.reload();
         onChanged?.();
         setBusy('');
+        setBusyAction('');
         return;
       }
       const intent = await connectIntegration(provider.id);
@@ -408,12 +459,37 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Falha ao iniciar conexão');
       setBusy('');
+      setBusyAction('');
+    }
+  }
+
+  async function handleSync(provider: IntegrationProvider) {
+    setBusy(provider.id);
+    setBusyAction('sync');
+    setError('');
+    setNotice('');
+    try {
+      const result = await syncIntegration(provider.id);
+      setNotice(
+        result.synced === 1
+          ? '1 item atualizado no cérebro do Jarvis.'
+          : `${result.synced} itens atualizados no cérebro do Jarvis.`,
+      );
+      overview.reload();
+      onChanged?.();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Falha ao sincronizar');
+    } finally {
+      setBusy('');
+      setBusyAction('');
     }
   }
 
   async function handleDisconnect(provider: IntegrationProvider) {
     setBusy(provider.id);
+    setBusyAction('disconnect');
     setError('');
+    setNotice('');
     try {
       await disconnectProvider(provider);
       closeSheet();
@@ -423,6 +499,7 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
       setError(exc instanceof Error ? exc.message : 'Falha ao desconectar');
     } finally {
       setBusy('');
+      setBusyAction('');
     }
   }
 
@@ -447,7 +524,7 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
 
   return (
     <>
-      {error && <div className="oj-error">{error}</div>}
+      {error && !selected && <div className="oj-error" role="alert">{error}</div>}
 
       {summary && (
         <div className="oj-card oj-conn-summary">
@@ -503,8 +580,12 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
           <ProviderDetail
             provider={selected}
             busy={busy === selected.id}
+            busyAction={busy === selected.id ? busyAction : ''}
+            error={error}
+            notice={notice}
             confirmingDisconnect={confirmingDisconnect}
             onConnect={() => handleConnect(selected)}
+            onSync={() => handleSync(selected)}
             onDisconnect={() => handleDisconnect(selected)}
             onToggleConfirm={setConfirmingDisconnect}
           />
@@ -546,15 +627,23 @@ function ProviderRow({
 function ProviderDetail({
   provider,
   busy,
+  busyAction,
+  error,
+  notice,
   confirmingDisconnect,
   onConnect,
+  onSync,
   onDisconnect,
   onToggleConfirm,
 }: {
   provider: IntegrationProvider;
   busy: boolean;
+  busyAction: string;
+  error: string;
+  notice: string;
   confirmingDisconnect: boolean;
   onConnect: () => void;
+  onSync: () => void;
   onDisconnect: () => void;
   onToggleConfirm: (value: boolean) => void;
 }) {
@@ -580,6 +669,9 @@ function ProviderDetail({
       </div>
 
       <p className="oj-conn-desc">{provider.description}</p>
+
+      {error && <div className="oj-conn-error-note" role="alert">{error}</div>}
+      {notice && <div className="oj-conn-success-note" role="status">{notice}</div>}
 
       <div className="oj-conn-block">
         <div className="oj-card-label">O que ele faz</div>
@@ -661,6 +753,22 @@ function ProviderDetail({
       )}
 
       {provider.id === 'whatsapp' && <WhatsAppActivation />}
+
+      {canSyncProvider(provider) && (
+        <div className="oj-conn-sync">
+          <Button disabled={busy} onClick={onSync}>
+            <RefreshCw
+              size={17}
+              className={busyAction === 'sync' ? 'is-spinning' : ''}
+            />
+            {busyAction === 'sync' ? 'Sincronizando…' : 'Sincronizar agora'}
+          </Button>
+          <p className="oj-conn-note">
+            Atualiza o contexto usado pelo Jarvis sem importar corpos completos ou
+            credenciais.
+          </p>
+        </div>
+      )}
 
       {provider.availability === 'device_only' && (
         <div className="oj-conn-block">

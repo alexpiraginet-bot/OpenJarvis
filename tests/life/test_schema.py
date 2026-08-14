@@ -245,6 +245,58 @@ def test_postgres_v11_migration_secures_adaptive_training_tables() -> None:
         )
 
 
+def test_postgres_v12_migration_secures_integration_items() -> None:
+    database = _PostgresDatabase(schema_version=12)
+
+    ensure_schema(database)  # type: ignore[arg-type]
+
+    assert 'ALTER TABLE "integration_items" ENABLE ROW LEVEL SECURITY' in (
+        database.statements
+    )
+    assert (
+        'REVOKE ALL ON TABLE "integration_items" FROM "authenticated"'
+        in database.statements
+    )
+
+
+def test_sqlite_v12_migration_creates_integration_items(tmp_path) -> None:
+    database = connect(str(tmp_path / "life-v12.db"))
+    try:
+        database.execute("PRAGMA user_version = 12")
+        database.commit()
+
+        ensure_schema(database)
+
+        columns = database.execute("PRAGMA table_info('integration_items')").fetchall()
+        index_columns = database.execute(
+            "PRAGMA index_info('idx_integration_items_user_provider_date')"
+        ).fetchall()
+        version = database.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        database.close()
+
+    assert {row["name"] for row in columns} >= {
+        "id",
+        "user_id",
+        "provider",
+        "external_id",
+        "kind",
+        "title",
+        "summary",
+        "occurred_at",
+        "source_url",
+        "metadata_json",
+        "created_at",
+        "updated_at",
+    }
+    assert [row["name"] for row in index_columns] == [
+        "user_id",
+        "provider",
+        "occurred_at",
+    ]
+    assert version == CURRENT_SCHEMA_VERSION == 13
+
+
 def test_sqlite_v11_migration_creates_adaptive_training_schema(tmp_path) -> None:
     database = connect(str(tmp_path / "life-v11.db"))
     try:
@@ -302,7 +354,7 @@ def test_sqlite_v11_migration_creates_adaptive_training_schema(tmp_path) -> None
 
     for table, columns in expected_columns.items():
         assert actual[table] >= columns
-    assert version == CURRENT_SCHEMA_VERSION == 12
+    assert version == CURRENT_SCHEMA_VERSION == 13
 
 
 def test_sqlite_v10_migration_creates_channel_link_rate_limits(tmp_path) -> None:
@@ -329,7 +381,7 @@ def test_sqlite_v10_migration_creates_channel_link_rate_limits(tmp_path) -> None
         "window_started_at",
         "last_attempt_at",
     }
-    assert version == CURRENT_SCHEMA_VERSION == 12
+    assert version == CURRENT_SCHEMA_VERSION == 13
 
 
 def test_sqlite_v9_migration_creates_finance_operation_receipts(tmp_path) -> None:
@@ -355,7 +407,7 @@ def test_sqlite_v9_migration_creates_finance_operation_receipts(tmp_path) -> Non
         "status",
         "result_json",
     }
-    assert version == CURRENT_SCHEMA_VERSION == 12
+    assert version == CURRENT_SCHEMA_VERSION == 13
 
 
 def test_postgres_v1_migration_only_locks_new_integration_tables() -> None:

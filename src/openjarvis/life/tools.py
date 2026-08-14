@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.life import LifeContext, open_life
+from openjarvis.life.integrations import IntegrationsStore
 from openjarvis.life.money import format_money as _money
 from openjarvis.life.schema import SCHEMA
 from openjarvis.life.service import LifeServiceError
@@ -219,6 +220,7 @@ class LifeOverviewTool(_LifeTool):
                 "(upcoming birthdays), work (open and overdue tasks) or health "
                 "(user-confirmed profile, conditions, medications, allergies, "
                 "hydration, nutrition, measurements and document metadata). Use "
+                "connections for synchronized mail, calendars and activities. Use "
                 "this before answering any question about the user's money, "
                 "training, habits, family or tasks."
             ),
@@ -235,6 +237,7 @@ class LifeOverviewTool(_LifeTool):
                             "family",
                             "work",
                             "health",
+                            "connections",
                         ],
                         "description": "Which part of life to read.",
                     },
@@ -277,6 +280,8 @@ class LifeOverviewTool(_LifeTool):
             payload = service.work_summary(user.id)
         elif section == "health":
             payload = service.health_summary(user.id, timezone_name=user.timezone)
+        elif section == "connections":
+            payload = IntegrationsStore(life).context_snapshot(user.id)
         else:
             return ToolResult(
                 tool_name="life_overview",

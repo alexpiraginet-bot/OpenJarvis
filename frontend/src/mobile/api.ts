@@ -577,6 +577,16 @@ export const connectIntegration = (provider: string) =>
     `/integrations/${provider}/connect`,
   );
 
+export interface IntegrationSyncResult {
+  provider: string;
+  synced: number;
+  last_sync_at: string;
+}
+
+/** Import bounded provider data into the authenticated client's Jarvis context. */
+export const syncIntegration = (provider: string) =>
+  post<IntegrationSyncResult>(`/integrations/${provider}/sync`);
+
 export interface NativeDeviceGrant {
   grantedScopes: string[];
   deviceId: string;

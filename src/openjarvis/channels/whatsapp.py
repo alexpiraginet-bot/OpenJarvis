@@ -416,10 +416,10 @@ class WhatsAppChannel(BaseChannel):
         message: WhatsAppOutboundMessage,
     ) -> WhatsAppSendResult:
         """Send a structured Cloud API message and return its provider receipt."""
-        payload = _outbound_payload(recipient, message)
         if not self._token or not self._phone_number_id:
             logger.warning("Cannot send WhatsApp message: channel is not configured")
             return WhatsAppSendResult(False, error_code="not_configured")
+        payload = _outbound_payload(recipient, message)
         try:
             import httpx
 

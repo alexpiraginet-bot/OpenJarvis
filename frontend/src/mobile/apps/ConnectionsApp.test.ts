@@ -4,10 +4,12 @@ import type {
   IntegrationProvider,
 } from '../types';
 import {
+  canSyncProvider,
   connectionsHeadline,
   disconnectProvider,
   formatRelativeTime,
   ledTone,
+  parseIntegrationCallback,
   presentProvider,
   showGenericDisconnect,
 } from './ConnectionsApp';
@@ -200,6 +202,33 @@ describe('showGenericDisconnect', () => {
     expect(showGenericDisconnect(provider({ connection: connection() }))).toBe(
       true,
     );
+  });
+});
+
+describe('provider synchronization controls', () => {
+  it('offers sync only to a live OAuth connection backed by a credential', () => {
+    expect(canSyncProvider(provider({ connection: connection() }))).toBe(true);
+    expect(
+      canSyncProvider(
+        provider({
+          auth: { kind: 'device', pkce: false },
+          connection: connection({ has_credential: false }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      canSyncProvider(provider({ connection: connection({ status: 'expired' }) })),
+    ).toBe(false);
+  });
+
+  it('reads only the bounded OAuth callback state from the current URL', () => {
+    expect(
+      parseIntegrationCallback('?integration=gmail&status=connected&ignored=x'),
+    ).toEqual({ provider: 'gmail', status: 'connected' });
+    expect(parseIntegrationCallback('?integration=gmail&status=other')).toBeNull();
+    expect(
+      parseIntegrationCallback('?integration=../../segredo&status=connected'),
+    ).toBeNull();
   });
 });
 

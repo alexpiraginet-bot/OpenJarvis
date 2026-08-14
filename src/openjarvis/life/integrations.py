@@ -44,6 +44,7 @@ from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -59,6 +60,9 @@ from urllib.parse import urlencode
 from openjarvis.life import LifeContext
 from openjarvis.life.db import Database
 
+if TYPE_CHECKING:
+    from openjarvis.life.oauth_providers import OAuthRequestContext
+
 #: Uma autorização iniciada e abandonada não pode virar lixo permanente nem
 #: janela de ataque: dez minutos cobrem qualquer consent screen real.
 AUTH_REQUEST_TTL_SECONDS = 600
@@ -66,13 +70,11 @@ AUTH_REQUEST_TTL_SECONDS = 600
 #: URL pública do deployment — necessária para montar o redirect_uri do OAuth.
 _BASE_URL_ENV = "OPENJARVIS_LIFE_PUBLIC_BASE_URL"
 
-#: A rota de callback (`/v1/life/integrations/{provider}/callback`) e a troca
-#: code→token chegam na fase seguinte deste hub. Enquanto não existirem,
-#: nenhum provedor OAuth pode se anunciar conectável — um "Conectar" que
-#: termina em 404 depois do consentimento é o oposto de fail-closed. O gate
-#: vira ``True`` no mesmo commit que publicar o callback; os testes o ligam
-#: via monkeypatch para exercer o contrato completo de connect-intent.
-OAUTH_CALLBACK_IMPLEMENTED = False
+#: A rota de callback (`/v1/life/integrations/{provider}/callback`) conclui a
+#: troca code→token no servidor. Este gate deve permanecer alinhado ao router:
+#: se a rota for removida, volta a ``False`` no mesmo commit para o catálogo
+#: falhar fechado antes de mandar o usuário a uma consent screen sem retorno.
+OAUTH_CALLBACK_IMPLEMENTED = True
 
 _CALLBACK_PENDING_PREREQUISITE = (
     "Callback OAuth do servidor ainda não publicado (próxima fase deste hub)"
@@ -331,12 +333,13 @@ PROVIDERS: Dict[str, ProviderSpec] = {
 class CredentialVault(Protocol):
     """Onde tokens vivem — nunca no banco do Life.
 
-    ``store`` devolve uma referência opaca; ``discard`` a invalida. A
-    implementação real (KMS, keyring, tabela cifrada à parte) chega junto com
-    a troca code→token por provedor.
+    ``store`` devolve uma referência opaca, ``resolve`` lê o payload somente
+    no servidor e ``discard`` invalida a referência.
     """
 
     def store(self, user_id: str, provider: str, payload: Mapping[str, Any]) -> str: ...
+
+    def resolve(self, ref: str) -> Mapping[str, Any]: ...
 
     def discard(self, ref: str) -> None: ...
 
@@ -350,12 +353,20 @@ class NullCredentialVault:
             " a conexão não foi criada."
         )
 
+    def resolve(self, ref: str) -> Mapping[str, Any]:
+        raise IntegrationsError(
+            "Nenhum cofre de credenciais está configurado neste servidor."
+        )
+
     def discard(self, ref: str) -> None:
         # Nada pôde ser guardado, logo não há o que descartar.
         return None
 
 
-def _availability(spec: ProviderSpec) -> Tuple[str, Tuple[str, ...]]:
+def _availability(
+    spec: ProviderSpec,
+    callback_available: Optional[bool] = None,
+) -> Tuple[str, Tuple[str, ...]]:
     """Camada 1 do estado: o que este deployment pode oferecer de verdade.
 
     "Disponível" exige a cadeia inteira: app configurado no ambiente E o
@@ -368,7 +379,10 @@ def _availability(spec: ProviderSpec) -> Tuple[str, Tuple[str, ...]]:
         return "device_only", ()
     required = (*spec.env_vars, _BASE_URL_ENV)
     missing = tuple(name for name in required if not os.environ.get(name))
-    if missing or not OAUTH_CALLBACK_IMPLEMENTED:
+    callback_ready = (
+        OAUTH_CALLBACK_IMPLEMENTED if callback_available is None else callback_available
+    )
+    if missing or not callback_ready:
         return "needs_setup", missing
     return "available", ()
 
@@ -406,12 +420,14 @@ class IntegrationsStore:
         *,
         vault: Optional[CredentialVault] = None,
         now: Optional[Callable[[], datetime]] = None,
+        oauth_callback_available: Optional[bool] = None,
     ) -> None:
         self._db: Database = life.connection
         self._vault: CredentialVault = (
             vault if vault is not None else NullCredentialVault()
         )
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._oauth_callback_available = oauth_callback_available
 
     @property
     def connection(self) -> Database:
@@ -447,12 +463,16 @@ class IntegrationsStore:
         providers: List[Dict[str, Any]] = []
         connected = attention = 0
         for spec in PROVIDERS.values():
-            availability, missing = _availability(spec)
+            availability, missing = _availability(spec, self._oauth_callback_available)
             prerequisites = list(spec.prerequisites)
             if (
                 spec.auth_kind == "oauth"
                 and spec.stage == "available"
-                and not OAUTH_CALLBACK_IMPLEMENTED
+                and not (
+                    OAUTH_CALLBACK_IMPLEMENTED
+                    if self._oauth_callback_available is None
+                    else self._oauth_callback_available
+                )
             ):
                 # Derivado, não estático: quando o callback existir e o gate
                 # virar, esta linha some do catálogo sozinha.
@@ -527,6 +547,52 @@ class IntegrationsStore:
         ).fetchone()
         return row is not None and str(row["status"]) == "connected"
 
+    def context_snapshot(
+        self, user_id: str, *, limit_per_kind: int = 5
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Return a small tenant-bound projection for tools and model context.
+
+        Only items owned by providers whose connection is currently live can
+        reach the assistant. Calendar entries are future-only; mail and
+        activities are recent-first. Provider content remains untrusted data —
+        callers must label it as such when placing it in a model prompt.
+        """
+        bounded_limit = max(1, min(int(limit_per_kind), 10))
+        base_sql = (
+            "SELECT i.provider, i.kind, i.title, i.summary, i.occurred_at,"
+            " i.source_url, i.metadata_json"
+            " FROM integration_items AS i"
+            " INNER JOIN integration_connections AS c"
+            " ON c.user_id = i.user_id AND c.provider = i.provider"
+            " WHERE i.user_id = ? AND c.status = 'connected' AND i.kind = ?"
+        )
+
+        calendar_rows = self._db.execute(
+            base_sql + " AND i.occurred_at >= ? ORDER BY i.occurred_at ASC LIMIT ?",
+            (user_id, "calendar", self._now().isoformat(), bounded_limit),
+        ).fetchall()
+        activity_rows = self._db.execute(
+            base_sql + " ORDER BY i.occurred_at DESC LIMIT ?",
+            (user_id, "activity", bounded_limit),
+        ).fetchall()
+        # Fetch a small surplus so unread mail can be prioritized without
+        # relying on backend-specific JSON operators.
+        mail_rows = self._db.execute(
+            base_sql + " ORDER BY i.occurred_at DESC LIMIT ?",
+            (user_id, "mail", bounded_limit * 4),
+        ).fetchall()
+        mail = [_context_item(row) for row in mail_rows]
+        mail.sort(key=lambda item: item["occurred_at"], reverse=True)
+        mail.sort(
+            key=lambda item: bool(item["metadata"].get("unread")),
+            reverse=True,
+        )
+        return {
+            "calendar": [_context_item(row) for row in calendar_rows],
+            "mail": mail[:bounded_limit],
+            "activity": [_context_item(row) for row in activity_rows],
+        }
+
     def is_device_connected(
         self,
         user_id: str,
@@ -565,7 +631,7 @@ class IntegrationsStore:
         não configurados, device-only ou ainda não disponíveis.
         """
         spec = _require_provider(provider_id)
-        availability, missing = _availability(spec)
+        availability, missing = _availability(spec, self._oauth_callback_available)
         if availability == "coming_soon":
             raise IntegrationUnavailableError(
                 f"{spec.label} ainda não está disponível nesta versão.",
@@ -646,6 +712,65 @@ class IntegrationsStore:
             "state": state,
             "expires_at": expires_at,
         }
+
+    def authorization_context(
+        self,
+        state: str,
+        provider_id: str,
+    ) -> "OAuthRequestContext":
+        """Resolve one live, provider-bound state without consuming it yet."""
+        spec = _require_provider(provider_id)
+        row = self._db.execute(
+            "SELECT * FROM integration_auth_requests WHERE state_hash = ?",
+            (_hash_state(state),),
+        ).fetchone()
+        if row is None:
+            raise IntegrationAuthError(
+                "Autorização desconhecida, expirada ou já utilizada."
+            )
+        if str(row["provider"]) != spec.id:
+            raise IntegrationAuthError("A autorização não pertence a este provedor.")
+        now = self._now()
+        try:
+            expired = datetime.fromisoformat(str(row["expires_at"])) < now
+        except ValueError:
+            expired = True
+        if expired:
+            self._db.execute(
+                "DELETE FROM integration_auth_requests WHERE id = ?",
+                (row["id"],),
+            )
+            self._db.commit()
+            raise IntegrationAuthError(
+                "Autorização expirada; comece a conexão de novo."
+            )
+        try:
+            decoded_scopes = json.loads(str(row["scopes"] or "[]"))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise IntegrationAuthError("Escopos da autorização inválidos.") from exc
+        if not isinstance(decoded_scopes, list) or any(
+            not isinstance(scope, str) for scope in decoded_scopes
+        ):
+            raise IntegrationAuthError("Escopos da autorização inválidos.")
+        from openjarvis.life.oauth_providers import OAuthRequestContext
+
+        return OAuthRequestContext(
+            provider=spec.id,
+            redirect_uri=str(row["redirect_uri"]),
+            code_verifier=str(row["code_verifier"] or ""),
+            requested_scopes=tuple(decoded_scopes),
+        )
+
+    def discard_authorization(self, state: str, provider_id: str) -> bool:
+        """Consume a denied callback without changing an existing connection."""
+        spec = _require_provider(provider_id)
+        removed = self._db.execute(
+            "DELETE FROM integration_auth_requests"
+            " WHERE state_hash = ? AND provider = ?",
+            (_hash_state(state), spec.id),
+        ).rowcount
+        self._db.commit()
+        return bool(removed)
 
     def complete_authorization(
         self,
@@ -1024,6 +1149,36 @@ def _public_connection(row: Mapping[str, Any]) -> Dict[str, Any]:
         "revoked_at": row["revoked_at"],
         "updated_at": row["updated_at"],
         "has_credential": bool(row["credential_ref"]),
+    }
+
+
+def _context_item(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Decode one defensive, bounded provider-data projection."""
+    try:
+        metadata = json.loads(str(row["metadata_json"] or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    try:
+        metadata_size = len(
+            json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
+    except (TypeError, ValueError):
+        metadata = {}
+        metadata_size = 0
+    if metadata_size > 4096:
+        metadata = {}
+    return {
+        "provider": str(row["provider"])[:32],
+        "kind": str(row["kind"])[:32],
+        "title": str(row["title"] or "")[:240],
+        "summary": str(row["summary"] or "")[:800],
+        "occurred_at": str(row["occurred_at"])[:64],
+        "source_url": str(row["source_url"] or "")[:512],
+        "metadata": metadata,
     }
 
 

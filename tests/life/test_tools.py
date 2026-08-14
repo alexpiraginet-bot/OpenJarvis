@@ -71,11 +71,36 @@ def test_overview_returns_today(life, user, tools):
     assert payload["alerts"][0]["title"] == "Luz está vencida"
 
 
-@pytest.mark.parametrize("section", ["finance", "fitness", "routine", "family", "work"])
+@pytest.mark.parametrize(
+    "section", ["finance", "fitness", "routine", "family", "work", "connections"]
+)
 def test_overview_serves_each_section(tools, section):
     result = tools[0].execute(section=section)
     assert result.success
     assert isinstance(json.loads(result.content), dict)
+
+
+def test_overview_connections_reads_only_the_bound_tenant(life, user, tools):
+    now = "2099-08-14T12:00:00+00:00"
+    life.connection.execute(
+        "INSERT INTO integration_connections"
+        " (id, user_id, provider, status, created_at, updated_at)"
+        " VALUES (?, ?, 'google_calendar', 'connected', ?, ?)",
+        ("calendar-connection", user.id, now, now),
+    )
+    life.connection.execute(
+        "INSERT INTO integration_items"
+        " (id, user_id, provider, external_id, kind, title, occurred_at,"
+        " created_at, updated_at)"
+        " VALUES (?, ?, 'google_calendar', ?, 'calendar', ?, ?, ?, ?)",
+        ("calendar-item", user.id, "event-1", "Consulta", now, now, now),
+    )
+    life.connection.commit()
+
+    result = tools[0].execute(section="connections")
+
+    assert result.success
+    assert json.loads(result.content)["calendar"][0]["title"] == "Consulta"
 
 
 def test_fitness_overview_exposes_the_prescribed_coach_session(life, user, tools):

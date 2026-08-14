@@ -16,7 +16,9 @@ from fastapi.testclient import TestClient
 
 from openjarvis.life import integrations as integrations_module
 from openjarvis.life.app_attest import AppAttestError
+from openjarvis.life.integration_sync import IntegrationItem
 from openjarvis.life.integrations import PROVIDERS, IntegrationsStore
+from openjarvis.life.oauth_providers import OAuthCredential
 from openjarvis.server.life_routes import create_life_router
 
 GOOGLE_ENV = {
@@ -42,8 +44,42 @@ class _MemoryVault:
         self.stored[ref] = dict(payload)
         return ref
 
+    def resolve(self, ref: str) -> dict:
+        return dict(self.stored[ref])
+
     def discard(self, ref: str) -> None:
         self.stored.pop(ref, None)
+
+
+class _FakeOAuthClient:
+    def __init__(self) -> None:
+        self.calls = []
+        self.fetch_calls = []
+        self.items = [
+            IntegrationItem(
+                external_id="mail-1",
+                kind="mail",
+                title="Assunto",
+                summary="Resumo",
+                occurred_at="2026-08-14T11:00:00+00:00",
+                metadata={"unread": True},
+            )
+        ]
+
+    def exchange(self, context, code):
+        self.calls.append({"context": context, "code": code})
+        return OAuthCredential(
+            access_token="provider-access-token",
+            refresh_token="provider-refresh-token",
+            expires_at="2099-08-14T18:00:00+00:00",
+            token_type="Bearer",
+            granted_scopes=context.requested_scopes,
+            account_label="alex@exemplo.com",
+        )
+
+    def fetch_items(self, provider, payload, now):
+        self.fetch_calls.append((provider, dict(payload), now))
+        return list(self.items)
 
 
 class _FakeAppAttestStore:
@@ -72,6 +108,28 @@ def client(tmp_path, monkeypatch):
     with TestClient(app) as test_client:
         test_client.life = router.life_context
         test_client.app_attest = app_attest
+        yield test_client
+    router.life_context.close()
+
+
+@pytest.fixture()
+def callback_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENJARVIS_LIFE_OPEN_SIGNUP", "1")
+    for name, value in GOOGLE_ENV.items():
+        monkeypatch.setenv(name, value)
+    app = FastAPI()
+    vault = _MemoryVault()
+    oauth = _FakeOAuthClient()
+    router = create_life_router(
+        str(tmp_path / "life-oauth.db"),
+        integration_vault=vault,
+        oauth_client=oauth,
+    )
+    app.include_router(router)
+    with TestClient(app) as test_client:
+        test_client.life = router.life_context
+        test_client.integration_vault = vault
+        test_client.oauth_client = oauth
         yield test_client
     router.life_context.close()
 
@@ -131,6 +189,7 @@ def _seed_connected_gmail(client, auth, monkeypatch) -> None:
 def test_every_integration_route_requires_a_bearer_token(client):
     assert client.get("/v1/life/integrations").status_code == 401
     assert client.post("/v1/life/integrations/gmail/connect").status_code == 401
+    assert client.post("/v1/life/integrations/gmail/sync").status_code == 401
     assert (
         client.post(
             "/v1/life/integrations/apple_calendar/device-grant",
@@ -191,8 +250,10 @@ def test_connect_fails_closed_when_the_provider_is_not_ready(client, auth):
     assert "OPENJARVIS_LIFE_GOOGLE_CLIENT_ID" in unconfigured.json()["detail"]
 
 
-def test_connect_is_refused_until_the_callback_ships(client, auth, monkeypatch):
-    """Só env não libera o fluxo: sem callback publicado, conectar é 409."""
+def test_connect_is_refused_without_runtime_vault_or_oauth_client(
+    client, auth, monkeypatch
+):
+    """Env não basta quando o runtime não consegue guardar/trocar tokens."""
     for name, value in GOOGLE_ENV.items():
         monkeypatch.setenv(name, value)
     response = client.post("/v1/life/integrations/gmail/connect", headers=auth)
@@ -200,9 +261,12 @@ def test_connect_is_refused_until_the_callback_ships(client, auth, monkeypatch):
     assert "callback" in response.json()["detail"].lower()
 
 
-def test_connect_returns_an_authorize_url_and_stays_honest(client, auth, monkeypatch):
+def test_connect_returns_an_authorize_url_and_stays_honest(
+    callback_client, monkeypatch
+):
     _configure_google(monkeypatch)
-    response = client.post("/v1/life/integrations/gmail/connect", headers=auth)
+    auth = _register(callback_client, "oauth-connect@exemplo.com")
+    response = callback_client.post("/v1/life/integrations/gmail/connect", headers=auth)
     assert response.status_code == 200
     body = response.json()
     assert body["authorize_url"].startswith("https://accounts.google.com/")
@@ -210,9 +274,161 @@ def test_connect_returns_an_authorize_url_and_stays_honest(client, auth, monkeyp
     assert body["expires_at"]
     assert "google-client-secret" not in response.text
     # Iniciar o OAuth não conecta nada: o catálogo continua sem conexão.
-    entry = _catalog_entry(client, auth, "gmail")
+    entry = _catalog_entry(callback_client, auth, "gmail")
     assert entry["connection"] is None
     assert entry["pending_auth"] == {"expires_at": body["expires_at"]}
+
+
+# -- Callback OAuth ---------------------------------------------------------
+
+
+def test_callback_connects_without_bearer_and_returns_to_the_single_screen(
+    callback_client,
+):
+    auth = _register(callback_client, "oauth-owner@exemplo.com")
+    begun = callback_client.post(
+        "/v1/life/integrations/gmail/connect", headers=auth
+    ).json()
+
+    response = callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "code": "single-use-code"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == ("/vida?integration=gmail&status=connected")
+    entry = _catalog_entry(callback_client, auth, "gmail")
+    assert entry["connection"]["status"] == "connected"
+    assert entry["connection"]["account_label"] == "alex@exemplo.com"
+    assert entry["pending_auth"] is None
+    assert callback_client.oauth_client.calls[-1]["code"] == "single-use-code"
+    stored = next(iter(callback_client.integration_vault.stored.values()))
+    assert stored["access_token"] == "provider-access-token"
+    assert "provider-access-token" not in response.text
+    assert "single-use-code" not in response.text
+
+
+def test_callback_rejects_provider_mismatch_without_consuming_the_state(
+    callback_client,
+):
+    auth = _register(callback_client, "oauth-mismatch@exemplo.com")
+    begun = callback_client.post(
+        "/v1/life/integrations/gmail/connect", headers=auth
+    ).json()
+
+    mismatch = callback_client.get(
+        "/v1/life/integrations/google_calendar/callback",
+        params={"state": begun["state"], "code": "wrong-provider-code"},
+        follow_redirects=False,
+    )
+    valid = callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "code": "right-provider-code"},
+        follow_redirects=False,
+    )
+
+    assert mismatch.headers["location"].endswith("status=error")
+    assert valid.headers["location"].endswith("status=connected")
+    assert [call["code"] for call in callback_client.oauth_client.calls] == [
+        "right-provider-code"
+    ]
+
+
+def test_denied_callback_consumes_state_and_never_calls_token_endpoint(
+    callback_client,
+):
+    auth = _register(callback_client, "oauth-denied@exemplo.com")
+    begun = callback_client.post(
+        "/v1/life/integrations/gmail/connect", headers=auth
+    ).json()
+
+    denied = callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "error": "access_denied"},
+        follow_redirects=False,
+    )
+    replay = callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "code": "late-code"},
+        follow_redirects=False,
+    )
+
+    assert denied.headers["location"].endswith("status=error")
+    assert replay.headers["location"].endswith("status=error")
+    assert callback_client.oauth_client.calls == []
+    assert _catalog_entry(callback_client, auth, "gmail")["pending_auth"] is None
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{}, {"state": "state-without-code"}, {"code": "code-without-state"}],
+)
+def test_callback_missing_parameters_fails_closed(callback_client, params):
+    response = callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params=params,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("status=error")
+    assert callback_client.oauth_client.calls == []
+
+
+def test_callback_connection_is_tenant_bound(callback_client):
+    owner = _register(callback_client, "oauth-tenant-owner@exemplo.com")
+    other = _register(callback_client, "oauth-tenant-other@exemplo.com")
+    begun = callback_client.post(
+        "/v1/life/integrations/gmail/connect", headers=owner
+    ).json()
+
+    callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "code": "tenant-code"},
+        follow_redirects=False,
+    )
+
+    assert _catalog_entry(callback_client, owner, "gmail")["connection"] is not None
+    assert _catalog_entry(callback_client, other, "gmail")["connection"] is None
+
+
+# -- Sincronização ----------------------------------------------------------
+
+
+def test_connected_provider_syncs_normalized_items(callback_client):
+    auth = _register(callback_client, "oauth-sync@exemplo.com")
+    begun = callback_client.post(
+        "/v1/life/integrations/gmail/connect", headers=auth
+    ).json()
+    callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "code": "sync-code"},
+        follow_redirects=False,
+    )
+
+    response = callback_client.post("/v1/life/integrations/gmail/sync", headers=auth)
+
+    assert response.status_code == 200
+    assert response.json()["synced"] == 1
+    assert callback_client.oauth_client.fetch_calls[-1][0] == "gmail"
+    entry = _catalog_entry(callback_client, auth, "gmail")
+    assert entry["connection"]["last_sync_status"] == "ok"
+    assert entry["connection"]["last_sync_at"]
+
+
+def test_sync_rejects_unknown_or_disconnected_provider(callback_client):
+    auth = _register(callback_client, "oauth-nosync@exemplo.com")
+
+    assert (
+        callback_client.post(
+            "/v1/life/integrations/unknown/sync", headers=auth
+        ).status_code
+        == 404
+    )
+    response = callback_client.post("/v1/life/integrations/gmail/sync", headers=auth)
+    assert response.status_code == 409
+    assert "conectado" in response.json()["detail"]
 
 
 # -- Autorizacao nativa ------------------------------------------------------
@@ -313,25 +529,36 @@ def test_disconnect_with_nothing_is_404(client, auth):
     assert response.status_code == 404
 
 
-def test_disconnect_cancels_a_pending_authorization(client, auth, monkeypatch):
+def test_disconnect_cancels_a_pending_authorization(callback_client, monkeypatch):
     _configure_google(monkeypatch)
-    client.post("/v1/life/integrations/gmail/connect", headers=auth)
-    response = client.delete("/v1/life/integrations/gmail", headers=auth)
+    auth = _register(callback_client, "oauth-cancel@exemplo.com")
+    begun = callback_client.post("/v1/life/integrations/gmail/connect", headers=auth)
+    assert begun.status_code == 200
+    response = callback_client.delete("/v1/life/integrations/gmail", headers=auth)
     assert response.status_code == 200
     assert response.json()["result"] == "canceled"
-    assert _catalog_entry(client, auth, "gmail")["pending_auth"] is None
+    assert _catalog_entry(callback_client, auth, "gmail")["pending_auth"] is None
 
 
-def test_disconnect_revokes_a_connected_provider(client, auth, monkeypatch):
-    _seed_connected_gmail(client, auth, monkeypatch)
-    assert _catalog_entry(client, auth, "gmail")["connection"]["status"] == (
+def test_disconnect_revokes_a_connected_provider(callback_client, monkeypatch):
+    _configure_google(monkeypatch)
+    auth = _register(callback_client, "oauth-revoke@exemplo.com")
+    begun = callback_client.post(
+        "/v1/life/integrations/gmail/connect", headers=auth
+    ).json()
+    callback_client.get(
+        "/v1/life/integrations/gmail/callback",
+        params={"state": begun["state"], "code": "revoke-code"},
+        follow_redirects=False,
+    )
+    assert _catalog_entry(callback_client, auth, "gmail")["connection"]["status"] == (
         "connected"
     )
 
-    response = client.delete("/v1/life/integrations/gmail", headers=auth)
+    response = callback_client.delete("/v1/life/integrations/gmail", headers=auth)
     assert response.status_code == 200
     assert response.json()["result"] == "revoked"
-    connection = _catalog_entry(client, auth, "gmail")["connection"]
+    connection = _catalog_entry(callback_client, auth, "gmail")["connection"]
     assert connection["status"] == "revoked"
     assert connection["has_credential"] is False
 

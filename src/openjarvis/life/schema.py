@@ -27,13 +27,14 @@ from typing import TYPE_CHECKING, Dict, Tuple
 if TYPE_CHECKING:
     from openjarvis.life.db import Database
 
+# v13: normalized, tenant-scoped records synchronized from external providers.
 # v12: adaptive training plus reviewed financial document intake.
 # v11: link-code cooldown/window counters are durable across serverless workers.
 # v10: durable receipts make direct financial mutations exactly-once across
 # client/network retries, even when a fresh App Attest challenge is issued.
 # O bump faz um Postgres já migrado reexecutar o DDL idempotente
 # (``ensure_schema`` retorna cedo quando a versão gravada é a atual).
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 13
 
 
 @dataclass(frozen=True, slots=True)
@@ -731,6 +732,27 @@ CREATE TABLE IF NOT EXISTS integration_connections (
 );
 """
 
+# Provider payloads are reduced to a bounded, prompt-safe projection before
+# storage. The provider idempotency key is tenant-scoped so reconnects and
+# repeated sync jobs update one row rather than multiplying personal data.
+_DDL_INTEGRATION_ITEMS = """\
+CREATE TABLE IF NOT EXISTS integration_items (
+    id            TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    external_id   TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    title         TEXT NOT NULL DEFAULT '',
+    summary       TEXT NOT NULL DEFAULT '',
+    occurred_at   TEXT NOT NULL,
+    source_url    TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (user_id, provider, external_id)
+);
+"""
+
 # O ``state`` do OAuth volta por um callback não autenticado, então é esta
 # linha que nomeia o usuário — e só o hash fica gravado, como em auth_tokens.
 # O ``code_verifier`` PKCE precisa sobreviver até a troca do code; sozinho ele
@@ -912,6 +934,7 @@ _ALL_DDL = (
     _DDL_JARVIS_APP_ATTEST_KEYS,
     _DDL_FINANCE_OPERATION_RECEIPTS,
     _DDL_INTEGRATION_CONNECTIONS,
+    _DDL_INTEGRATION_ITEMS,
     _DDL_INTEGRATION_AUTH_REQUESTS,
     _DDL_INTEGRATION_DEVICE_GRANTS,
     _DDL_CHANNEL_LINKS,
@@ -993,6 +1016,8 @@ _INDEXES = (
     " ON finance_operation_receipts (user_id, status, created_at);",
     "CREATE INDEX IF NOT EXISTS idx_integration_conn_user"
     " ON integration_connections (user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_integration_items_user_provider_date"
+    " ON integration_items (user_id, provider, occurred_at);",
     "CREATE INDEX IF NOT EXISTS idx_device_grants_user_provider"
     " ON integration_device_grants (user_id, provider, status);",
     "CREATE INDEX IF NOT EXISTS idx_channel_links_user_status"
@@ -1383,6 +1408,7 @@ def _ensure_schema(db: "Database") -> None:
             "jarvis_app_attest_keys",
             "finance_operation_receipts",
             "integration_connections",
+            "integration_items",
             "integration_auth_requests",
             "integration_device_grants",
             "channel_links",
@@ -1443,6 +1469,8 @@ def _ensure_schema(db: "Database") -> None:
                     "training_checkins",
                     "training_feedback",
                 )
+            if postgres_version < 13:
+                protected_tables += ("integration_items",)
         security_statements = []
         for table in protected_tables:
             security_statements.append(

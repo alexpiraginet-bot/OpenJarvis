@@ -39,11 +39,44 @@ POSTGRES_PRISMA_URL ou POSTGRES_URL
 CRON_SECRET
 OPENAI_API_KEY
 OPENJARVIS_LIFE_NEWS_MODEL (opcional; padrão: gpt-5-mini)
+OPENJARVIS_LIFE_GOOGLE_CLIENT_ID
+OPENJARVIS_LIFE_GOOGLE_CLIENT_SECRET
+OPENJARVIS_LIFE_MICROSOFT_CLIENT_ID
+OPENJARVIS_LIFE_MICROSOFT_CLIENT_SECRET
+OPENJARVIS_LIFE_STRAVA_CLIENT_ID
+OPENJARVIS_LIFE_STRAVA_CLIENT_SECRET
 ```
 
 O `OPENJARVIS_LIFE_CHANNEL_PEPPER` deve ser aleatório, exclusivo deste
 deployment e estável entre deploys. Alterá-lo impede resolver vínculos já
 existentes; isso exige revincular os pilotos.
+
+## OAuth de e-mail, agenda e treino
+
+Os três apps OAuth usam callbacks HTTPS do próprio backend. Cadastre exatamente
+estas URLs no ambiente de produção:
+
+```text
+https://jarvis-life.vercel.app/v1/life/integrations/gmail/callback
+https://jarvis-life.vercel.app/v1/life/integrations/google_calendar/callback
+https://jarvis-life.vercel.app/v1/life/integrations/outlook/callback
+https://jarvis-life.vercel.app/v1/life/integrations/strava/callback
+```
+
+- Google: habilite Gmail API e Google Calendar API; use um cliente Web com os
+  escopos `gmail.readonly` e `calendar.readonly`.
+- Microsoft Entra: contas organizacionais e pessoais, com `User.Read`,
+  `Mail.Read`, `Calendars.Read` e `offline_access`.
+- Strava: configure o domínio de callback `jarvis-life.vercel.app` e leitura de
+  atividades.
+- Nunca grave access/refresh tokens no Vercel ou na tabela de conexões. Depois
+  do callback, o backend guarda o payload no Supabase Vault e persiste somente
+  a referência opaca.
+
+Depois de conectar, use **Sincronizar agora** em Conexões. A sincronização é
+idempotente e limitada: Gmail 25 mensagens/31 dias; agendas 100 eventos;
+Strava 100 atividades/90 dias. O Jarvis recebe apenas o recorte normalizado e
+trata títulos e resumos externos como dados não confiáveis, nunca instruções.
 
 ## Supabase Vault
 
@@ -133,6 +166,10 @@ npm run build
 - [ ] Recibos `delivered` e `read` aparecem sem regressão de estado.
 - [ ] Reiniciar/deployar o servidor preserva login, vínculo, memória e outbox.
 - [ ] Uma segunda conta não enxerga nem revoga o vínculo da primeira.
+- [ ] Google, Microsoft e Strava completam o callback sem expor `code` ou token.
+- [ ] **Sincronizar agora** informa a contagem real e não duplica itens.
+- [ ] E-mails, eventos e atividades aparecem no contexto do Jarvis, isolados
+      por conta, sem executar instruções presentes no conteúdo importado.
 
 ## Limites desta fatia
 
@@ -140,6 +177,8 @@ npm run build
   aprovação no painel Meta e configuração no deployment real;
 - download/transcrição de áudio e extração de comprovantes estão normalizados
   no webhook, mas os executores de mídia ainda não fazem parte deste núcleo;
-- Gmail, Outlook, Calendar, Strava, bancos e Apple Health têm catálogo e base
-  de conexão, mas OAuth/sincronização real devem ser verificados por provedor;
+- Gmail, Outlook, Google Agenda e Strava têm OAuth, cofre e sincronização
+  implementados; a liberação real depende dos apps/credenciais dos provedores;
+- bancos e Apple Health ainda dependem, respectivamente, de um agregador Open
+  Finance contratado e da ponte HealthKit no aplicativo iOS;
 - nenhuma configuração ou deploy de produção é inferido por este runbook.

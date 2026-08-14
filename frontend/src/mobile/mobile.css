@@ -3430,6 +3430,49 @@ input:focus-visible {
   line-height: 1.45;
 }
 
+.oj-conn-success-note {
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--oj-ok) 36%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--oj-ok) 10%, transparent);
+  color: #9ff0b7;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.oj-conn-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--oj-cyan) 32%, var(--oj-hairline));
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 16% 0%, rgba(57, 211, 255, 0.13), transparent 54%),
+    rgba(3, 17, 27, 0.58);
+  box-shadow:
+    inset 0 1px 0 rgba(225, 253, 255, 0.1),
+    0 14px 30px -24px rgba(61, 207, 255, 0.72);
+}
+
+.oj-conn-sync .oj-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+}
+
+.oj-conn-sync .is-spinning {
+  animation: oj-conn-spin 900ms linear infinite;
+}
+
+@keyframes oj-conn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .oj-wa-activation {
   border-color: color-mix(in srgb, var(--oj-ok) 28%, var(--oj-hairline));
 }
@@ -3756,7 +3799,8 @@ input:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .oj-conn-led--warn,
-  .oj-conn-skeleton {
+  .oj-conn-skeleton,
+  .oj-conn-sync .is-spinning {
     animation: none;
   }
 
