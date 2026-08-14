@@ -16,15 +16,17 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.life import LifeContext, open_life
 from openjarvis.life.money import format_money as _money
+from openjarvis.life.schema import SCHEMA
 from openjarvis.life.service import LifeServiceError
 from openjarvis.life.tenancy import User
+from openjarvis.life.training import TrainingCoachError, TrainingCoachService
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 #: Which table each writable ``kind`` lands in.
@@ -43,7 +45,24 @@ _RECORD_TABLES = {
     "family_event": "family_events",
     "project": "projects",
     "task": "work_tasks",
+    "health_profile": "health_profiles",
+    "condition": "health_conditions",
+    "medication": "medications",
+    "allergy": "allergies",
+    "health_observation": "health_observations",
+    "hydration": "hydration_logs",
+    "nutrition": "nutrition_logs",
+    "health_document": "health_documents",
 }
+
+_COACH_RECORD_KINDS = frozenset(
+    {
+        "training_profile",
+        "training_plan",
+        "training_checkin",
+        "training_feedback",
+    }
+)
 
 #: Record kinds whose NOT NULL date column defaults to today when the model
 #: omits it. Without this an "adiciona a conta de luz" with no date given
@@ -55,6 +74,12 @@ _DATE_DEFAULTS = {
     "family_event": "event_on",
 }
 
+_DATETIME_DEFAULTS = {
+    "health_observation": "observed_at",
+    "hydration": "occurred_at",
+    "nutrition": "occurred_at",
+}
+
 # Fields maintained by multi-step domain actions. Generic record creation must
 # not bypass ledger entries, completion stamps or other side effects.
 _ACTION_OWNED_RECORD_FIELDS = {
@@ -63,6 +88,14 @@ _ACTION_OWNED_RECORD_FIELDS = {
     "workout": frozenset({"completed_at"}),
     "task": frozenset({"status", "done_at"}),
 }
+
+
+def life_record_app(kind: str) -> str | None:
+    """Return the canonical Life app that owns a writable record kind."""
+    if kind in _COACH_RECORD_KINDS:
+        return "fitness"
+    table = _RECORD_TABLES.get(kind)
+    return SCHEMA[table].app if table is not None else None
 
 
 class LifeUserError(RuntimeError):
@@ -102,12 +135,15 @@ def _apply_date_default(kind: str, fields: Dict[str, Any]) -> Dict[str, Any]:
     column = _DATE_DEFAULTS.get(kind)
     if column and not fields.get(column):
         fields[column] = date.today().isoformat()
+    datetime_column = _DATETIME_DEFAULTS.get(kind)
+    if datetime_column and not fields.get(datetime_column):
+        fields[datetime_column] = datetime.now(timezone.utc).isoformat()
     return fields
 
 
 def normalize_life_record_fields(kind: str, fields: Any) -> Dict[str, Any]:
     """Validate tool-call fields and normalize canonical integer money input."""
-    if kind not in _RECORD_TABLES:
+    if kind not in _RECORD_TABLES and kind not in _COACH_RECORD_KINDS:
         raise ValueError(f"Unknown kind: {kind}")
     if not isinstance(fields, dict):
         raise ValueError("fields must be an object")
@@ -178,8 +214,11 @@ class LifeOverviewTool(_LifeTool):
             description=(
                 "Read the user's life data: today's cross-domain briefing, or "
                 "a summary of finance (balance, spending, budgets), fitness "
-                "(workouts, records), routine (habits and streaks), family "
-                "(upcoming birthdays) or work (open and overdue tasks). Use "
+                "(coach plan, prescribed sessions, workouts, records), routine "
+                "(habits and streaks), family "
+                "(upcoming birthdays), work (open and overdue tasks) or health "
+                "(user-confirmed profile, conditions, medications, allergies, "
+                "hydration, nutrition, measurements and document metadata). Use "
                 "this before answering any question about the user's money, "
                 "training, habits, family or tasks."
             ),
@@ -195,6 +234,7 @@ class LifeOverviewTool(_LifeTool):
                             "routine",
                             "family",
                             "work",
+                            "health",
                         ],
                         "description": "Which part of life to read.",
                     },
@@ -225,13 +265,18 @@ class LifeOverviewTool(_LifeTool):
         elif section == "finance":
             payload = service.finance_summary(user.id)
         elif section == "fitness":
-            payload = service.fitness_summary(user.id)
+            payload = {
+                **service.fitness_summary(user.id),
+                "coach": TrainingCoachService(life.store).overview(user.id),
+            }
         elif section == "routine":
             payload = service.routine_summary(user.id)
         elif section == "family":
             payload = {"upcoming": service.upcoming_family(user.id)}
         elif section == "work":
             payload = service.work_summary(user.id)
+        elif section == "health":
+            payload = service.health_summary(user.id, timezone_name=user.timezone)
         else:
             return ToolResult(
                 tool_name="life_overview",
@@ -261,14 +306,17 @@ class LifeRecordTool(_LifeTool):
                 "Record something in the user's life: an expense or income, a "
                 "bill to pay, a budget, a savings goal, a workout, a body "
                 "measurement, a habit, a family member or event, a project or "
-                "a task. Amounts are in cents (R$45,90 = 4590)."
+                "a task; or a user-confirmed health profile, condition, "
+                "medication, allergy, observation, hydration, meal or document "
+                "metadata. Amounts are in cents (R$45,90 = 4590). Never infer "
+                "or diagnose a health fact."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": sorted(_RECORD_TABLES),
+                        "enum": sorted(set(_RECORD_TABLES).union(_COACH_RECORD_KINDS)),
                         "description": "What kind of entry to create.",
                     },
                     "fields": {
@@ -278,7 +326,13 @@ class LifeRecordTool(_LifeTool):
                             "category, description, occurred_on. bill: name, "
                             "amount_cents, due_on, recurrence. habit: name, "
                             "cadence. workout: name, scheduled_on, focus. "
-                            "task: title, due_on, priority."
+                            "task: title, due_on, priority. hydration: amount_ml. "
+                            "health_observation: kind, value, unit. condition and "
+                            "medication: name. nutrition: meal_type, description. "
+                            "training_profile: primary_sport, secondary_sports, "
+                            "goal, level, agenda and history. training_plan: "
+                            "start_on and weeks. training_checkin/training_feedback: "
+                            "session_id plus readiness or completion metrics."
                         ),
                     },
                     "user_id": {
@@ -297,7 +351,7 @@ class LifeRecordTool(_LifeTool):
         life = self._context()
         kind = params.get("kind", "")
         table = _RECORD_TABLES.get(kind)
-        if table is None:
+        if table is None and kind not in _COACH_RECORD_KINDS:
             return ToolResult(
                 tool_name="life_record",
                 success=False,
@@ -310,7 +364,27 @@ class LifeRecordTool(_LifeTool):
 
         try:
             fields = normalize_life_record_fields(kind, params.get("fields"))
-            if kind in ("expense", "income"):
+            if kind in _COACH_RECORD_KINDS:
+                coach = TrainingCoachService(life.store)
+                if kind == "training_profile":
+                    record = coach.save_profile(user.id, fields)
+                    summary = "perfil de treino atualizado"
+                elif kind == "training_plan":
+                    record = coach.generate_plan(
+                        user.id,
+                        start_on=fields.get("start_on"),
+                        weeks=fields.get("weeks", 8),
+                    )
+                    summary = "plano adaptativo criado"
+                elif kind == "training_checkin":
+                    session_id = str(fields.pop("session_id", ""))
+                    record = coach.check_in(user.id, session_id, **fields)
+                    summary = "prontidão analisada"
+                else:
+                    session_id = str(fields.pop("session_id", ""))
+                    record = coach.complete_session(user.id, session_id, **fields)
+                    summary = "sessão concluída e plano adaptado"
+            elif kind in ("expense", "income"):
                 record = life.service.add_transaction(
                     user.id,
                     amount_cents=fields.get("amount_cents", 0),
@@ -329,7 +403,7 @@ class LifeRecordTool(_LifeTool):
                 )
                 record = life.store.get(table, user.id, record_id) or {}
                 summary = f"{kind} criado"
-        except (LifeServiceError, ValueError) as exc:
+        except (LifeServiceError, TrainingCoachError, TypeError, ValueError) as exc:
             return ToolResult(tool_name="life_record", success=False, content=str(exc))
 
         return ToolResult(
@@ -465,5 +539,6 @@ __all__ = [
     "LifeRecordTool",
     "LifeUserError",
     "ensure_registered",
+    "life_record_app",
     "life_tools_for",
 ]

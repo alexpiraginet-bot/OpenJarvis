@@ -10,6 +10,7 @@
 		07988EAC498CE31CCEEBD1A8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6315400FB64C7A664C784D0E /* Assets.xcassets */; };
 		23330791202DD576A5109A24 /* JarvisConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A7F8021D4BDDA015186F18 /* JarvisConfiguration.swift */; };
 		282FDA30C2F8ADCFAC958481 /* NativeSpeechController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD967DCB4035BCA31E028165 /* NativeSpeechController.swift */; };
+		A1B2C3D4E5F60718293A4B6 /* NativeIntegrationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5061728394A5B6C /* NativeIntegrationController.swift */; };
 		35AC38A1E1FE03DA6128D774 /* JarvisConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9962B3BC06F8DA5B053AFC42 /* JarvisConfigurationTests.swift */; };
 		3E7E108966F04E526DB5B8C7 /* JarvisLifeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CABA8EC1643D580C9AC23235 /* JarvisLifeApp.swift */; };
 		4A1B2C3D4E5F60718293A4B5 /* BiometricLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B2C3D4E5F60718293A4B5C6 /* BiometricLock.swift */; };
@@ -31,6 +32,7 @@
 
 /* Begin PBXFileReference section */
 		06DBE3B7BFB87B0D8A1FCA5D /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		7A9B3A7C2CFD4AE9B5EB2A11 /* JarvisLife.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = JarvisLife.entitlements; sourceTree = "<group>"; };
 		206B8EC5321FEE2B2AE913BC /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		326C7919D600E49ECBFFF305 /* JarvisWebView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JarvisWebView.swift; sourceTree = "<group>"; };
 		4D381D7D029E02B6392FD94F /* JarvisLifeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JarvisLifeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -42,6 +44,7 @@
 		B53B37995BC6AD620ACA0840 /* JarvisLife.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JarvisLife.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CABA8EC1643D580C9AC23235 /* JarvisLifeApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JarvisLifeApp.swift; sourceTree = "<group>"; };
 		FD967DCB4035BCA31E028165 /* NativeSpeechController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeSpeechController.swift; sourceTree = "<group>"; };
+		B1C2D3E4F5061728394A5B6C /* NativeIntegrationController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeIntegrationController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -98,9 +101,11 @@
 				5B2C3D4E5F60718293A4B5C6 /* BiometricLock.swift */,
 				206B8EC5321FEE2B2AE913BC /* ContentView.swift */,
 				326C7919D600E49ECBFFF305 /* JarvisWebView.swift */,
+				B1C2D3E4F5061728394A5B6C /* NativeIntegrationController.swift */,
 				FD967DCB4035BCA31E028165 /* NativeSpeechController.swift */,
 				6315400FB64C7A664C784D0E /* Assets.xcassets */,
 				06DBE3B7BFB87B0D8A1FCA5D /* Info.plist */,
+				7A9B3A7C2CFD4AE9B5EB2A11 /* JarvisLife.entitlements */,
 			);
 			name = JarvisLife;
 			path = JarvisLife;
@@ -228,6 +233,7 @@
 				4A1B2C3D4E5F60718293A4B5 /* BiometricLock.swift in Sources */,
 				D6282F4B73AA5D487C8B2BBD /* ContentView.swift in Sources */,
 				D53861BA629D10F3E1C8F7E9 /* JarvisWebView.swift in Sources */,
+				A1B2C3D4E5F60718293A4B6 /* NativeIntegrationController.swift in Sources */,
 				282FDA30C2F8ADCFAC958481 /* NativeSpeechController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -265,12 +271,14 @@
 		11E8C05B7C66E364A2A55DE7 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APP_ATTEST_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CODE_SIGN_ENTITLEMENTS = JarvisLife/JarvisLife.entitlements;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = NP9X453K55;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -411,12 +419,14 @@
 		5A78EDB4E54E5E9F7962D2AA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APP_ATTEST_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CODE_SIGN_ENTITLEMENTS = JarvisLife/JarvisLife.entitlements;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = NP9X453K55;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

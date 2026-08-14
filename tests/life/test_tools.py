@@ -19,6 +19,7 @@ from openjarvis.life.tools import (
     ensure_registered,
     life_tools_for,
 )
+from openjarvis.life.training import TrainingCoachService
 
 
 @pytest.fixture()
@@ -77,6 +78,87 @@ def test_overview_serves_each_section(tools, section):
     assert isinstance(json.loads(result.content), dict)
 
 
+def test_fitness_overview_exposes_the_prescribed_coach_session(life, user, tools):
+    coach = TrainingCoachService(life.store)
+    coach.save_profile(
+        user.id,
+        {
+            "primary_goal": "5k",
+            "level": "beginner",
+            "weekly_days": 3,
+            "available_weekdays": [1, 3, 5],
+            "session_minutes": 40,
+            "current_weekly_km": 8,
+            "longest_recent_run_km": 4,
+            "equipment": [],
+        },
+    )
+    coach.generate_plan(user.id, weeks=4)
+
+    result = tools[0].execute(section="fitness")
+
+    assert result.success
+    payload = json.loads(result.content)
+    assert payload["coach"]["active_plan"]["status"] == "active"
+    assert payload["coach"]["next_session"]["objective"]
+    assert len(payload["coach"]["sessions"]) == 12
+
+
+def test_record_tool_can_operate_the_coach_from_voice(life, user, tools):
+    _, record, _ = tools
+    profile = record.execute(
+        kind="training_profile",
+        fields={
+            "primary_sport": "canoeing",
+            "secondary_sports": ["strength"],
+            "primary_goal": "general_fitness",
+            "level": "intermediate",
+            "weekly_days": 4,
+            "available_weekdays": [1, 3, 5, 7],
+            "session_minutes": 50,
+            "current_weekly_km": 12,
+            "longest_recent_run_km": 6,
+            "equipment": ["canoa", "halteres"],
+        },
+    )
+    plan = record.execute(
+        kind="training_plan",
+        fields={"start_on": "2026-08-17", "weeks": 4},
+    )
+    session = TrainingCoachService(life.store).overview(user.id)["sessions"][0]
+    checkin = record.execute(
+        kind="training_checkin",
+        fields={
+            "session_id": session["id"],
+            "sleep_quality": 7,
+            "soreness": 3,
+            "stress": 4,
+            "motivation": 8,
+            "pain": 1,
+        },
+    )
+    feedback = record.execute(
+        kind="training_feedback",
+        fields={
+            "session_id": session["id"],
+            "completion_pct": 100,
+            "actual_duration_min": 45,
+            "rpe": 6,
+            "energy": 8,
+            "pain": 1,
+        },
+    )
+
+    assert profile.success
+    assert plan.success
+    assert checkin.success
+    assert feedback.success
+    assert json.loads(profile.content)["record"]["primary_sport"] == "canoeing"
+    assert json.loads(plan.content)["record"]["weeks"] == 4
+    assert json.loads(checkin.content)["record"]["recommendation"] == "ready"
+    assert json.loads(feedback.content)["record"]["feedback"]["completion_pct"] == 100
+
+
 def test_overview_rejects_unknown_section(tools):
     result = tools[0].execute(section="astrologia")
     assert result.success is False
@@ -120,6 +202,39 @@ def test_record_creates_income(life, user, tools):
     row = life.store.list_records("transactions", user.id)[0]
     assert row["kind"] == "income"
     assert row["source"] == "agent"
+
+
+@pytest.mark.parametrize(
+    ("kind", "fields", "table"),
+    [
+        ("habit", {"name": "Beber água"}, "habits"),
+        (
+            "family_event",
+            {"title": "Consulta da família", "event_on": "2026-08-20"},
+            "family_events",
+        ),
+        ("project", {"name": "Lançamento"}, "projects"),
+        ("task", {"title": "Enviar proposta"}, "work_tasks"),
+        (
+            "health_profile",
+            {"goals": "Melhorar condicionamento", "consent_health_memory": 1},
+            "health_profiles",
+        ),
+        ("hydration", {"amount_ml": 500}, "hydration_logs"),
+        (
+            "nutrition",
+            {"meal_type": "lunch", "description": "Arroz, feijão e legumes"},
+            "nutrition_logs",
+        ),
+    ],
+)
+def test_record_tool_persists_every_specialist_domain(
+    life, user, tools, kind, fields, table
+):
+    result = tools[1].execute(kind=kind, fields=fields)
+
+    assert result.success
+    assert life.store.count(table, user.id) == 1
 
 
 def test_record_defaults_missing_dates_to_today(life, user, tools):

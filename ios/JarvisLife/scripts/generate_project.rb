@@ -24,6 +24,7 @@ source_names = %w[
   BiometricLock.swift
   ContentView.swift
   JarvisWebView.swift
+  NativeIntegrationController.swift
   NativeSpeechController.swift
 ]
 
@@ -35,6 +36,7 @@ end
 assets = app_group.new_file("Assets.xcassets")
 app_target.resources_build_phase.add_file_reference(assets)
 app_group.new_file("Info.plist")
+app_group.new_file("JarvisLife.entitlements")
 
 test_reference = test_group.new_file("JarvisConfigurationTests.swift")
 test_target.source_build_phase.add_file_reference(test_reference)
@@ -49,7 +51,8 @@ app_target.build_configurations.each do |configuration|
   settings["ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME"] = "AccentColor"
   settings["CLANG_ENABLE_MODULES"] = "YES"
   settings["CODE_SIGN_STYLE"] = "Automatic"
-  settings["CURRENT_PROJECT_VERSION"] = "5"
+  settings["CODE_SIGN_ENTITLEMENTS"] = "JarvisLife/JarvisLife.entitlements"
+  settings["CURRENT_PROJECT_VERSION"] = "6"
   settings["DEVELOPMENT_TEAM"] = "NP9X453K55"
   settings["ENABLE_PREVIEWS"] = "YES"
   settings["ENABLE_USER_SCRIPT_SANDBOXING"] = "YES"
@@ -67,6 +70,11 @@ app_target.build_configurations.each do |configuration|
     "http://127.0.0.1:8100/vida"
   else
     "https://jarvis-life.vercel.app/vida"
+  end
+  settings["APP_ATTEST_ENVIRONMENT"] = if configuration.name == "Debug"
+    "development"
+  else
+    "production"
   end
 end
 

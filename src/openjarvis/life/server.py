@@ -21,7 +21,7 @@ import logging
 import os
 import pathlib
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +29,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from openjarvis.life.db import configured_database_target
+from openjarvis.life.whatsapp import ChannelAddressVault, NewsProvider
 from openjarvis.server.life_routes import create_life_router
+from openjarvis.server.life_whatsapp_routes import WhatsAppSender
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,13 @@ def create_life_app(
     serve_static: bool = True,
     engine: Any | None = None,
     model: str | None = None,
+    channel_address_vault: ChannelAddressVault | None = None,
+    channel_pepper: bytes | None = None,
+    whatsapp_channel: WhatsAppSender | None = None,
+    whatsapp_verify_token: str | None = None,
+    whatsapp_app_secret: str | None = None,
+    whatsapp_news_provider: NewsProvider | None = None,
+    whatsapp_inbound_handler: Callable[[Any], Any] | None = None,
 ) -> FastAPI:
     """Build the Life-only application.
 
@@ -75,8 +84,39 @@ def create_life_app(
         allow_headers=["*"],
     )
 
+    resolved_whatsapp_channel = whatsapp_channel
+    if resolved_whatsapp_channel is None:
+        access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+        phone_number_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
+        if access_token and phone_number_id:
+            from openjarvis.channels.whatsapp import WhatsAppChannel
+
+            resolved_whatsapp_channel = WhatsAppChannel(
+                access_token=access_token,
+                phone_number_id=phone_number_id,
+            )
+    resolved_channel_pepper = (
+        channel_pepper
+        if channel_pepper is not None
+        else os.environ.get("OPENJARVIS_LIFE_CHANNEL_PEPPER", "").encode("utf-8")
+    )
     router = create_life_router(
-        db_path or configured_database_target()
+        db_path or configured_database_target(),
+        channel_address_vault=channel_address_vault,
+        channel_pepper=resolved_channel_pepper,
+        whatsapp_channel=resolved_whatsapp_channel,
+        whatsapp_verify_token=(
+            whatsapp_verify_token
+            if whatsapp_verify_token is not None
+            else os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+        ),
+        whatsapp_app_secret=(
+            whatsapp_app_secret
+            if whatsapp_app_secret is not None
+            else os.environ.get("WHATSAPP_APP_SECRET", "")
+        ),
+        whatsapp_news_provider=whatsapp_news_provider,
+        whatsapp_inbound_handler=whatsapp_inbound_handler,
     )
     app.include_router(router)
     app.state.life_context = getattr(router, "life_context", None)

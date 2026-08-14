@@ -12,12 +12,13 @@ import {
   ChevronRight,
   Dumbbell,
   Heart,
+  HeartPulse,
   LogOut,
   Repeat,
   Satellite,
   Wallet,
 } from 'lucide-react';
-import type { ComponentType } from 'react';
+import { type ComponentType, type ReactNode, useEffect, useRef } from 'react';
 import { ConnectionsPanel } from './apps/ConnectionsApp';
 import type { AppId, ShellAppId, Today } from './types';
 import { Empty, formatLongDate, formatMoney, Spinner } from './ui';
@@ -28,6 +29,7 @@ const ICONS: Record<ShellAppId, ComponentType<{ size?: number; color?: string }>
   routine: Repeat,
   family: Heart,
   work: Briefcase,
+  health: HeartPulse,
   connections: Satellite,
 };
 
@@ -37,13 +39,15 @@ const LABELS: Record<ShellAppId, string> = {
   routine: 'Rotina',
   family: 'Família',
   work: 'Trabalho',
+  health: 'Saúde',
   connections: 'Conexões',
 };
 
-const ORDER: AppId[] = ['finance', 'fitness', 'routine', 'family', 'work'];
+const ORDER: AppId[] = ['finance', 'fitness', 'routine', 'family', 'work', 'health'];
 const ORBIT_ORDER: ShellAppId[] = [
   'work',
   'fitness',
+  'health',
   'routine',
   'connections',
   'finance',
@@ -56,6 +60,7 @@ const SPECIALISTS: Record<ShellAppId, string> = {
   routine: 'Chefe de gabinete',
   family: 'Concierge familiar',
   work: 'Assistente executivo',
+  health: 'Especialista de saúde',
   connections: 'Engenheiro de integrações',
 };
 
@@ -65,7 +70,8 @@ const ORBIT_CODES: Record<ShellAppId, string> = {
   routine: 'RT-03',
   family: 'FM-04',
   work: 'EX-05',
-  connections: 'NX-06',
+  health: 'MD-06',
+  connections: 'NX-07',
 };
 
 /** How many alerts stay visible below the orbital system. */
@@ -78,6 +84,8 @@ export function Springboard({
   userName,
   onOpenApp,
   onAskJarvis,
+  assistantOpen,
+  assistantPanel,
   onLogout,
 }: {
   today: Today | null;
@@ -86,8 +94,22 @@ export function Springboard({
   userName: string;
   onOpenApp: (app: ShellAppId) => void;
   onAskJarvis: () => void;
+  assistantOpen: boolean;
+  assistantPanel: ReactNode;
   onLogout: () => void;
 }) {
+  const assistantRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!assistantOpen || !assistantRef.current) return;
+    assistantRef.current.scrollIntoView({
+      behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : 'smooth',
+      block: 'center',
+    });
+  }, [assistantOpen]);
+
   if (loading && !today) return <Spinner />;
 
   const alerts = today?.alerts ?? [];
@@ -179,6 +201,14 @@ export function Springboard({
                     : 'nenhum evento próximo'}
                 </small>
               </button>
+              <button type="button" onClick={() => onOpenApp('health')}>
+                <span><HeartPulse size={15} /> Saúde</span>
+                <strong>{today.health.hydration_today_ml} ml hoje</strong>
+                <small>
+                  {today.health.latest_observations.length} métrica(s) ·{' '}
+                  {today.health.documents.length} documento(s)
+                </small>
+              </button>
             </div>
           </section>
         )}
@@ -195,6 +225,8 @@ export function Springboard({
             className="oj-orbit-core"
             onClick={onAskJarvis}
             aria-label="Conversar com o Jarvis"
+            aria-controls="jarvis-inline-controls"
+            aria-expanded={assistantOpen}
           >
             <img src="/aether-neural-core.png" alt="" />
             <span className="oj-orbit-core-pulse" aria-hidden="true" />
@@ -234,6 +266,17 @@ export function Springboard({
             );
           })}
         </nav>
+
+        {assistantOpen && assistantPanel && (
+          <section
+            ref={assistantRef}
+            id="jarvis-inline-controls"
+            className="oj-jarvis-inline-slot"
+            aria-label="Comandos do Jarvis"
+          >
+            {assistantPanel}
+          </section>
+        )}
 
         <section className="oj-specialist-panel" aria-label="Conselho de especialistas">
           <div className="oj-panel-heading">

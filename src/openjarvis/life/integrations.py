@@ -191,6 +191,25 @@ PROVIDERS: Dict[str, ProviderSpec] = {
             tint="blue",
         ),
         ProviderSpec(
+            id="apple_calendar",
+            label="Calendário do iPhone",
+            category="Agenda",
+            description="Compromissos do aparelho no briefing e nas ações por voz.",
+            capabilities=(
+                "Ler os próximos compromissos no aparelho",
+                "Criar eventos após confirmação explícita",
+            ),
+            scopes=(),
+            auth_kind="device",
+            pkce=False,
+            stage="device_only",
+            prerequisites=(
+                "Acesso completo ao Calendário concedido no app iOS do Jarvis",
+            ),
+            icon="calendar",
+            tint="cyan",
+        ),
+        ProviderSpec(
             id="outlook",
             label="Outlook / Microsoft 365",
             category="Comunicação",
@@ -358,6 +377,17 @@ def _hash_state(state: str) -> str:
     return hashlib.sha256(state.encode("utf-8")).hexdigest()
 
 
+def _validated_device_id(device_id: str) -> str:
+    """Return one bounded opaque native-install identifier."""
+    value = device_id.strip() if isinstance(device_id, str) else ""
+    allowed = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    )
+    if not 8 <= len(value) <= 128 or any(char not in allowed for char in value):
+        raise IntegrationsError("Identificador do aparelho inválido.")
+    return value
+
+
 def _pkce_challenge(verifier: str) -> str:
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     return urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -408,6 +438,11 @@ class IntegrationsStore:
                 (user_id,),
             ).fetchall()
         }
+        whatsapp_link = self._db.execute(
+            "SELECT status, verified_at, revoked_at, updated_at"
+            " FROM channel_links WHERE user_id = ? AND channel = 'whatsapp'",
+            (user_id,),
+        ).fetchone()
 
         providers: List[Dict[str, Any]] = []
         connected = attention = 0
@@ -424,6 +459,23 @@ class IntegrationsStore:
                 prerequisites.append(_CALLBACK_PENDING_PREREQUISITE)
             row = connections.get(spec.id)
             public = _public_connection(row) if row else None
+            if (
+                spec.id == "whatsapp"
+                and whatsapp_link is not None
+                and str(whatsapp_link["status"]) == "verified"
+            ):
+                public = {
+                    "status": "connected",
+                    "account_label": "WhatsApp oficial",
+                    "granted_scopes": ["messages"],
+                    "connected_at": whatsapp_link["verified_at"],
+                    "last_sync_at": None,
+                    "last_sync_status": "",
+                    "last_error": "",
+                    "revoked_at": whatsapp_link["revoked_at"],
+                    "updated_at": whatsapp_link["updated_at"],
+                    "has_credential": False,
+                }
             if public:
                 if public["status"] == "connected":
                     connected += 1
@@ -457,6 +509,50 @@ class IntegrationsStore:
                 "pending": len(pending),
             },
         }
+
+    def is_connected(self, user_id: str, provider_id: str) -> bool:
+        """Return whether one tenant has a live connection to a known provider."""
+        spec = _require_provider(provider_id)
+        if spec.id == "whatsapp":
+            channel_row = self._db.execute(
+                "SELECT status FROM channel_links"
+                " WHERE user_id = ? AND channel = 'whatsapp'",
+                (user_id,),
+            ).fetchone()
+            return channel_row is not None and str(channel_row["status"]) == "verified"
+        row = self._db.execute(
+            "SELECT status FROM integration_connections"
+            " WHERE user_id = ? AND provider = ?",
+            (user_id, spec.id),
+        ).fetchone()
+        return row is not None and str(row["status"]) == "connected"
+
+    def is_device_connected(
+        self,
+        user_id: str,
+        provider_id: str,
+        device_id: str,
+        *,
+        required_scopes: Sequence[str] = (),
+    ) -> bool:
+        """Check a live native grant for this exact app installation."""
+        spec = _require_provider(provider_id)
+        try:
+            normalized_device_id = _validated_device_id(device_id)
+        except IntegrationsError:
+            return False
+        row = self._db.execute(
+            "SELECT status, granted_scopes FROM integration_device_grants"
+            " WHERE user_id = ? AND provider = ? AND device_id = ?",
+            (user_id, spec.id, normalized_device_id),
+        ).fetchone()
+        if row is None or str(row["status"]) != "connected":
+            return False
+        try:
+            granted = set(json.loads(str(row["granted_scopes"])))
+        except (TypeError, json.JSONDecodeError):
+            return False
+        return set(required_scopes).issubset(granted)
 
     # -- Connect-intent -------------------------------------------------------
 
@@ -688,6 +784,7 @@ class IntegrationsStore:
         provider_id: str,
         *,
         granted: Sequence[str],
+        device_id: str,
         device_label: str = "",
     ) -> Dict[str, Any]:
         """Registra uma permissão concedida no aparelho (HealthKit).
@@ -698,36 +795,70 @@ class IntegrationsStore:
         spec = _require_provider(provider_id)
         if spec.auth_kind != "device":
             raise IntegrationsError(f"{spec.label} não usa autorização de dispositivo.")
-        now_iso = self._now().isoformat()
-        self._db.execute(
-            "INSERT INTO integration_connections (id, user_id, provider,"
-            " status, granted_scopes, account_label, credential_ref,"
-            " connected_at, last_sync_at, last_sync_status, last_error,"
-            " revoked_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'connected', ?, ?, '', ?, NULL, '', '', NULL,"
-            " ?, ?)"
-            " ON CONFLICT(user_id, provider) DO UPDATE SET"
-            " status = 'connected',"
-            " granted_scopes = excluded.granted_scopes,"
-            " account_label = excluded.account_label,"
-            " credential_ref = '',"
-            " connected_at = excluded.connected_at,"
-            " last_sync_status = '',"
-            " last_error = '',"
-            " revoked_at = NULL,"
-            " updated_at = excluded.updated_at",
-            (
-                uuid.uuid4().hex,
-                user_id,
-                spec.id,
-                json.dumps(list(granted)),
-                device_label,
-                now_iso,
-                now_iso,
-                now_iso,
-            ),
+        normalized_device_id = _validated_device_id(device_id)
+        normalized_scopes = tuple(
+            dict.fromkeys(
+                scope.strip()
+                for scope in granted
+                if isinstance(scope, str) and scope.strip()
+            )
         )
-        self._db.commit()
+        if not normalized_scopes:
+            raise IntegrationsError("A concessão do aparelho não contém permissões.")
+        normalized_label = device_label.strip()[:120]
+        now_iso = self._now().isoformat()
+        scopes_json = json.dumps(list(normalized_scopes))
+        with self._db.transaction():
+            self._db.execute(
+                "INSERT INTO integration_device_grants"
+                " (user_id, provider, device_id, device_label, status,"
+                " granted_scopes, granted_at, updated_at, revoked_at)"
+                " VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, NULL)"
+                " ON CONFLICT(user_id, provider, device_id) DO UPDATE SET"
+                " device_label = excluded.device_label,"
+                " status = 'connected',"
+                " granted_scopes = excluded.granted_scopes,"
+                " granted_at = excluded.granted_at,"
+                " updated_at = excluded.updated_at,"
+                " revoked_at = NULL",
+                (
+                    user_id,
+                    spec.id,
+                    normalized_device_id,
+                    normalized_label,
+                    scopes_json,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            self._db.execute(
+                "INSERT INTO integration_connections (id, user_id, provider,"
+                " status, granted_scopes, account_label, credential_ref,"
+                " connected_at, last_sync_at, last_sync_status, last_error,"
+                " revoked_at, created_at, updated_at)"
+                " VALUES (?, ?, ?, 'connected', ?, ?, '', ?, NULL, '', '', NULL,"
+                " ?, ?)"
+                " ON CONFLICT(user_id, provider) DO UPDATE SET"
+                " status = 'connected',"
+                " granted_scopes = excluded.granted_scopes,"
+                " account_label = excluded.account_label,"
+                " credential_ref = '',"
+                " connected_at = excluded.connected_at,"
+                " last_sync_status = '',"
+                " last_error = '',"
+                " revoked_at = NULL,"
+                " updated_at = excluded.updated_at",
+                (
+                    uuid.uuid4().hex,
+                    user_id,
+                    spec.id,
+                    scopes_json,
+                    normalized_label,
+                    now_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
         return self._public_connection_for(user_id, spec.id)
 
     # -- Sincronização e erros ------------------------------------------------
@@ -820,6 +951,12 @@ class IntegrationsStore:
                     "UPDATE integration_connections SET status = 'revoked',"
                     " credential_ref = '', revoked_at = ?, updated_at = ?"
                     " WHERE user_id = ? AND provider = ?",
+                    (now_iso, now_iso, user_id, spec.id),
+                )
+                self._db.execute(
+                    "UPDATE integration_device_grants SET status = 'revoked',"
+                    " revoked_at = ?, updated_at = ?"
+                    " WHERE user_id = ? AND provider = ? AND status = 'connected'",
                     (now_iso, now_iso, user_id, spec.id),
                 )
                 result = "revoked"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import hmac
 import json
 import logging
@@ -11,6 +10,11 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from starlette.responses import PlainTextResponse
+
+from openjarvis.channels.whatsapp import (
+    normalize_webhook_messages,
+    verify_webhook_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -318,36 +322,34 @@ def create_webhook_router(
             logger.error("WhatsApp webhook rejected: app secret not configured.")
             return Response("Webhook signature verification not configured", 403)
         signature = request.headers.get("X-Hub-Signature-256", "")
-        expected = (
-            "sha256="
-            + hmac.new(
-                whatsapp_app_secret.encode(),
-                body_bytes,
-                hashlib.sha256,
-            ).hexdigest()
-        )
-        if not hmac.compare_digest(signature, expected):
+        if not verify_webhook_signature(
+            whatsapp_app_secret,
+            body_bytes,
+            signature,
+        ):
             return Response("Invalid signature", status_code=403)
 
-        payload = json.loads(body_bytes)
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                for message in value.get("messages", []):
-                    if message.get("type") != "text":
-                        continue
-                    sender = message.get("from", "")
-                    text = message.get("text", {}).get("body", "")
+        try:
+            payload = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            return Response("Invalid JSON", status_code=400)
 
-                    task = asyncio.create_task(
-                        asyncio.to_thread(
-                            bridge.handle_incoming,
-                            sender,
-                            text,
-                            "whatsapp",
-                        )
-                    )
-                    task.add_done_callback(_log_task_exception)
+        for message in normalize_webhook_messages(payload):
+            if message.metadata.get("kind") == "delivery_status":
+                continue
+            if not message.sender or not message.content:
+                continue
+            metadata = {**message.metadata, "message_id": message.message_id}
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    bridge.handle_incoming,
+                    message.sender,
+                    message.content,
+                    "whatsapp",
+                    metadata=metadata,
+                )
+            )
+            task.add_done_callback(_log_task_exception)
 
         return Response("OK", status_code=200)
 

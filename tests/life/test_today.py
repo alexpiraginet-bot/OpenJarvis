@@ -23,6 +23,7 @@ def test_empty_life_produces_no_alerts(life, user):
         "routine",
         "family",
         "work",
+        "health",
     }
 
 
@@ -270,6 +271,7 @@ def test_voice_today_matches_spoken_cross_domain_context(life, user):
         "routine": 1,
         "family": 0,
         "work": 1,
+        "health": 0,
     }
 
 

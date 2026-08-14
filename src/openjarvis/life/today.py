@@ -392,6 +392,7 @@ def build_voice_today(
             "routine": len(pending_habits),
             "family": len([event for event in family if event["days_away"] <= 1]),
             "work": len(overdue_tasks) + len(due_today_tasks),
+            "health": 0,
         },
         "finance": {
             "balance_cents": sum(
@@ -611,6 +612,11 @@ def build_today(
             }
         )
 
+    # -- Health --------------------------------------------------------------
+    # Health records are surfaced without deriving risk scores or medical
+    # alerts. Those require clinical validation; the app remains an organizer.
+    health = service.health_summary(user.id, anchor=anchor, timezone_name=user.timezone)
+
     alerts.sort(key=lambda item: SEVERITIES.index(item["severity"]))
 
     return {
@@ -624,6 +630,7 @@ def build_today(
             "routine": len(pending_habits),
             "family": len([e for e in family if e["days_away"] <= 1]),
             "work": len(work["overdue"]) + len(work["due_today"]),
+            "health": 0,
         },
         "finance": {
             "balance_cents": finance["balance_cents"],
@@ -650,4 +657,5 @@ def build_today(
             "overdue_count": len(work["overdue"]),
             "due_today_count": len(work["due_today"]),
         },
+        "health": health,
     }

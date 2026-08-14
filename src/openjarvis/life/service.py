@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from openjarvis.life.db import POSTGRES
 from openjarvis.life.store import Filter, LifeStore
 
 #: Recurrences a bill may carry. ``none`` is a one-off.
@@ -53,6 +55,25 @@ def today_in(timezone_name: str) -> date:
         return datetime.now(ZoneInfo(timezone_name)).date()
     except Exception:
         return datetime.now(timezone.utc).date()
+
+
+def utc_day_range(anchor: date, timezone_name: str) -> tuple[str, str]:
+    """Return the UTC bounds of one calendar day in ``timezone_name``.
+
+    Health events are stored as absolute ISO timestamps.  Comparing them to a
+    bare local date makes records created after the UTC rollover disappear
+    from the user's current day, so the query bounds must be converted first.
+    """
+    try:
+        local_timezone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        local_timezone = timezone.utc
+    start = datetime.combine(anchor, time.min, tzinfo=local_timezone)
+    end = datetime.combine(anchor + timedelta(days=1), time.min, tzinfo=local_timezone)
+    return (
+        start.astimezone(timezone.utc).isoformat(),
+        end.astimezone(timezone.utc).isoformat(),
+    )
 
 
 def month_range(anchor: date) -> MonthRange:
@@ -140,6 +161,8 @@ class LifeService:
             raise LifeServiceError("kind must be 'income' or 'expense'")
 
         with self._store.transaction():
+            if account_id:
+                self._require_account(user_id, account_id)
             record_id = self._store.insert(
                 "transactions",
                 user_id,
@@ -158,17 +181,28 @@ class LifeService:
                 self._adjust_balance(user_id, account_id, delta)
             return self._store.get("transactions", user_id, record_id) or {}
 
-    def _adjust_balance(self, user_id: str, account_id: str, delta: int) -> None:
-        """Apply a signed delta to an account balance, if the account exists."""
-        account = self._store.get("accounts", user_id, account_id)
-        if account is None:
-            return
-        self._store.update(
-            "accounts",
-            user_id,
-            account_id,
-            {"balance_cents": int(account["balance_cents"]) + delta},
+    def _require_account(self, user_id: str, account_id: str) -> None:
+        """Lock and validate a tenant-owned account before ledger writes."""
+        lock_clause = (
+            " FOR UPDATE" if self._store.connection.backend == POSTGRES else ""
         )
+        row = self._store.connection.execute(
+            "SELECT id FROM accounts WHERE id = ? AND user_id = ?" + lock_clause,
+            (account_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise LifeServiceError(f"Account not found: {account_id}")
+
+    def _adjust_balance(self, user_id: str, account_id: str, delta: int) -> None:
+        """Apply a signed delta to the previously locked tenant account."""
+        updated = self._store.connection.execute(
+            "UPDATE accounts SET balance_cents = balance_cents + ?"
+            " WHERE id = ? AND user_id = ?",
+            (int(delta), account_id, user_id),
+        ).rowcount
+        if updated != 1:
+            raise LifeServiceError(f"Account not found: {account_id}")
+        self._store.connection.commit()
 
     def pay_bill(
         self, user_id: str, bill_id: str, *, account_id: str = "", paid_on: str = ""
@@ -179,9 +213,16 @@ class LifeService:
         show "pago — próxima em 12/09" without a second round trip.
         """
         with self._store.transaction():
-            bill = self._store.get("bills", user_id, bill_id)
-            if bill is None:
+            lock_clause = (
+                " FOR UPDATE" if self._store.connection.backend == POSTGRES else ""
+            )
+            row = self._store.connection.execute(
+                "SELECT * FROM bills WHERE id = ? AND user_id = ?" + lock_clause,
+                (bill_id, user_id),
+            ).fetchone()
+            if row is None:
                 raise LifeServiceError(f"Bill not found: {bill_id}")
+            bill = dict(row)
             if bill["status"] == "paid":
                 raise LifeServiceError("Bill is already paid")
             when = paid_on or date.today().isoformat()
@@ -313,9 +354,7 @@ class LifeService:
                 limit=500,
             )
             for bill in stale:
-                self._store.update(
-                    "bills", user_id, bill["id"], {"status": "overdue"}
-                )
+                self._store.update("bills", user_id, bill["id"], {"status": "overdue"})
             return len(stale)
 
     # == Fitness =============================================================
@@ -630,6 +669,85 @@ class LifeService:
                 "projects",
                 user_id,
                 filters=(Filter("status", "=", "active"),),
+                limit=50,
+            ),
+        }
+
+    # == Health ==============================================================
+
+    def health_summary(
+        self,
+        user_id: str,
+        *,
+        anchor: Optional[date] = None,
+        timezone_name: str = "UTC",
+    ) -> Dict[str, Any]:
+        """Return confirmed health facts without deriving clinical conclusions."""
+        anchor = anchor or today_in(timezone_name)
+        start, end = utc_day_range(anchor, timezone_name)
+        profile_rows = self._store.list_records("health_profiles", user_id, limit=1)
+        hydration = self._store.list_records(
+            "hydration_logs",
+            user_id,
+            filters=(
+                Filter("occurred_at", ">=", start),
+                Filter("occurred_at", "<", end),
+            ),
+            order_by="occurred_at",
+            limit=200,
+        )
+        observations = self._store.list_records(
+            "health_observations",
+            user_id,
+            order_by="observed_at",
+            limit=100,
+        )
+        latest_by_kind: Dict[str, Dict[str, Any]] = {}
+        for observation in observations:
+            kind = str(observation["kind"])
+            if kind not in latest_by_kind:
+                latest_by_kind[kind] = observation
+
+        active_filter = (Filter("status", "=", "active"),)
+        return {
+            "profile": profile_rows[0] if profile_rows else None,
+            "active_conditions": self._store.list_records(
+                "health_conditions",
+                user_id,
+                filters=active_filter,
+                order_by="name",
+                descending=False,
+                limit=100,
+            ),
+            "active_medications": self._store.list_records(
+                "medications",
+                user_id,
+                filters=active_filter,
+                order_by="name",
+                descending=False,
+                limit=100,
+            ),
+            "allergies": self._store.list_records(
+                "allergies",
+                user_id,
+                order_by="substance",
+                descending=False,
+                limit=100,
+            ),
+            "hydration_today_ml": sum(int(row["amount_ml"]) for row in hydration),
+            "nutrition_today_count": self._store.count(
+                "nutrition_logs",
+                user_id,
+                filters=(
+                    Filter("occurred_at", ">=", start),
+                    Filter("occurred_at", "<", end),
+                ),
+            ),
+            "latest_observations": list(latest_by_kind.values())[:8],
+            "documents": self._store.list_records(
+                "health_documents",
+                user_id,
+                order_by="document_date",
                 limit=50,
             ),
         }

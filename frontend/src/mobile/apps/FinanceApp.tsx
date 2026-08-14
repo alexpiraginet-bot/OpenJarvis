@@ -1,16 +1,33 @@
 /** Finanças — saldo, contas a pagar, gastos e metas. */
 
-import { Plus } from 'lucide-react';
+import { Check, FileSearch, Plus, ScanLine, ShieldCheck, X } from 'lucide-react';
 import { useState } from 'react';
 import {
+  analyzeFinancialDocument,
+  cancelAction,
+  confirmAction,
   createRecord,
   fetchFinanceSummary,
+  listFinancialDocuments,
   listAccounts,
   listBills,
   listRecords,
   payBill,
+  type FinancialDocumentAnalysisResult,
+  type JarvisActionProposal,
 } from '../api';
-import type { Account, Bill, Goal, Transaction } from '../types';
+import type {
+  Account,
+  Bill,
+  FinancialCandidate,
+  Goal,
+  Transaction,
+} from '../types';
+import {
+  buildStrongAuthProof,
+  proposalRequiresStrongAuth,
+  runFinanceMutation,
+} from '../nativeIntegrations';
 import {
   Button,
   Empty,
@@ -41,6 +58,200 @@ const CATEGORIES = [
 ];
 
 const CATEGORY_OPTIONS = CATEGORIES.map((value) => ({ value, label: value }));
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+export function FinancialCandidateList({
+  candidates,
+  currency,
+}: {
+  candidates: FinancialCandidate[];
+  currency: string;
+}) {
+  return (
+    <div className="oj-finance-candidates">
+      {candidates.map((candidate, index) => (
+        <div className="oj-finance-candidate" key={`${candidate.occurred_on}-${index}`}>
+          <div className="oj-row-body">
+            <div className="oj-row-title">{candidate.description || candidate.category}</div>
+            <div className="oj-row-sub">
+              {candidate.category} · {formatShortDate(candidate.occurred_on)} ·{' '}
+              {Math.round(candidate.confidence * 100)}% de confiança
+            </div>
+            <small>Aguardando revisão antes de entrar no financeiro.</small>
+          </div>
+          <div className={candidate.kind === 'income' ? 'oj-pos' : 'oj-neg'}>
+            {candidate.kind === 'income' ? '+' : '−'}
+            {formatMoney(candidate.amount_cents, currency)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function FinancialDocumentsTab({
+  currency,
+  onChanged,
+}: {
+  currency: string;
+  onChanged: () => void;
+}) {
+  const documents = useLoader(listFinancialDocuments);
+  const [analysis, setAnalysis] = useState<FinancialDocumentAnalysisResult | null>(
+    null,
+  );
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  async function analyze(file: File) {
+    if (file.size > 10 * 1024 * 1024) {
+      setError('O arquivo deve ter no máximo 10 MB.');
+      return;
+    }
+    setBusy('analyze');
+    setError('');
+    try {
+      const dataBase64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
+      const result = await analyzeFinancialDocument({
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        dataBase64,
+      });
+      setAnalysis(result);
+      documents.reload();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Falha ao analisar documento');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function replaceProposal(updated: JarvisActionProposal) {
+    setAnalysis((current) =>
+      current
+        ? {
+            ...current,
+            proposals: current.proposals.map((proposal) =>
+              proposal.id === updated.id ? updated : proposal,
+            ),
+          }
+        : current,
+    );
+  }
+
+  async function confirm(proposal: JarvisActionProposal) {
+    setBusy(proposal.id);
+    setError('');
+    try {
+      const proof = proposalRequiresStrongAuth(proposal)
+        ? await buildStrongAuthProof('finance', proposal.id, 'explicit', true)
+        : undefined;
+      const result = await confirmAction(proposal.id, 'explicit', proof);
+      replaceProposal(result.proposal);
+      onChanged();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Falha ao confirmar lançamento');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function reject(proposal: JarvisActionProposal) {
+    setBusy(proposal.id);
+    setError('');
+    try {
+      const result = await cancelAction(proposal.id);
+      replaceProposal(result.proposal);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Falha ao rejeitar lançamento');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <>
+      {error && <div className="oj-error">{error}</div>}
+      <div className="oj-finance-document-hero">
+        <div className="oj-finance-document-icon"><ScanLine size={26} /></div>
+        <div>
+          <div className="oj-card-label">DIRETOR FINANCEIRO IA</div>
+          <h3>Comprovantes e extratos</h3>
+          <p>Envie foto, PDF, CSV ou OFX. O Jarvis identifica e pede sua confirmação antes de lançar.</p>
+        </div>
+        <label className={`oj-btn ${busy === 'analyze' ? 'is-disabled' : ''}`}>
+          <FileSearch size={18} /> {busy === 'analyze' ? 'Analisando…' : 'Escolher arquivo'}
+          <input
+            hidden
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf,text/csv,.csv,.ofx,.qfx"
+            disabled={busy === 'analyze'}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void analyze(file);
+              event.currentTarget.value = '';
+            }}
+          />
+        </label>
+        <div className="oj-finance-privacy">
+          <ShieldCheck size={16} /> Imagens e PDFs são processados pela IA. O arquivo
+          bruto não é salvo; ficam apenas resumo, hash e propostas auditáveis.
+        </div>
+      </div>
+
+      {analysis && (
+        <Section title={analysis.replayed ? 'Análise recuperada' : 'Revise antes de lançar'}>
+          <FinancialCandidateList
+            candidates={analysis.document.analysis.candidates}
+            currency={currency}
+          />
+          <div className="oj-finance-proposal-actions">
+            {analysis.proposals.map((proposal, index) => (
+              <div className="oj-finance-proposal" key={proposal.id}>
+                <span>{proposal.summary}</span>
+                {proposal.status === 'pending' ? (
+                  <div>
+                    <button type="button" aria-label={`Rejeitar item ${index + 1}`} disabled={busy === proposal.id} onClick={() => void reject(proposal)}><X size={17} /></button>
+                    <button type="button" aria-label={`Confirmar item ${index + 1}`} disabled={busy === proposal.id} onClick={() => void confirm(proposal)}><Check size={17} /></button>
+                  </div>
+                ) : (
+                  <strong>{proposal.status === 'confirmed' ? 'Lançado' : 'Rejeitado'}</strong>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      <Section title="Documentos recentes">
+        {documents.loading ? (
+          <Spinner />
+        ) : (documents.data?.documents.length ?? 0) === 0 ? (
+          <Empty>Nenhum documento analisado.</Empty>
+        ) : (
+          <ListGroup>
+            {documents.data?.documents.map((document) => (
+              <Row
+                key={document.id}
+                title={document.filename}
+                sub={`${document.analysis.candidates.length} item(ns) · ${document.document_kind === 'statement' ? 'extrato' : 'comprovante'}`}
+                value="Revisado"
+              />
+            ))}
+          </ListGroup>
+        )}
+      </Section>
+    </>
+  );
+}
 
 export function FinanceOverview({ currency }: { currency: string }) {
   const { data, error, loading } = useLoader(fetchFinanceSummary);
@@ -147,7 +358,9 @@ export function BillsTab({
     setBusy(bill.id);
     setError('');
     try {
-      await payBill(bill.id, defaultAccount);
+      await runFinanceMutation((operationId, approval) =>
+        payBill(bill.id, defaultAccount, approval, operationId),
+      );
       bills.reload();
       onChanged();
     } catch (exc) {
@@ -165,12 +378,19 @@ export function BillsTab({
     }
     setError('');
     try {
-      await createRecord<Bill>('bills', {
-        name: name.trim(),
-        amount_cents: cents,
-        due_on: dueOn,
-        recurrence,
-      });
+      await runFinanceMutation((operationId, approval) =>
+        createRecord<Bill>(
+          'bills',
+          {
+            name: name.trim(),
+            amount_cents: cents,
+            due_on: dueOn,
+            recurrence,
+          },
+          approval,
+          operationId,
+        ),
+      );
       setAdding(false);
       setName('');
       setAmount('');
@@ -295,14 +515,21 @@ export function TransactionsTab({
     }
     setError('');
     try {
-      await createRecord<Transaction>('transactions', {
-        amount_cents: cents,
-        kind,
-        category,
-        description: description.trim(),
-        occurred_on: occurredOn,
-        account_id: accounts.data?.records?.[0]?.id ?? '',
-      });
+      await runFinanceMutation((operationId, approval) =>
+        createRecord<Transaction>(
+          'transactions',
+          {
+            amount_cents: cents,
+            kind,
+            category,
+            description: description.trim(),
+            occurred_on: occurredOn,
+            account_id: accounts.data?.records?.[0]?.id ?? '',
+          },
+          approval,
+          operationId,
+        ),
+      );
       setAdding(false);
       setAmount('');
       setDescription('');

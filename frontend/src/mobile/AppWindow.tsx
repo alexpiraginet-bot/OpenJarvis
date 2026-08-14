@@ -40,7 +40,7 @@ export function AppWindow({
   return (
     <div className="oj-window">
       <div className="oj-window-bar">
-        <button type="button" className="oj-back" onClick={onClose}>
+        <button type="button" className="oj-back" onClick={onClose} autoFocus>
           <ChevronLeft size={22} />
           <span>Início</span>
         </button>
@@ -91,13 +91,13 @@ export function AppWindow({
             initial={
               reduceMotion
                 ? false
-                : { opacity: 0, x: 22, filter: 'blur(3px)' }
+                : { opacity: 0, x: 22 }
             }
-            animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+            animate={{ opacity: 1, x: 0 }}
             exit={
               reduceMotion
                 ? { opacity: 0 }
-                : { opacity: 0, x: -14, filter: 'blur(2px)' }
+                : { opacity: 0, x: -14 }
             }
             transition={
               reduceMotion

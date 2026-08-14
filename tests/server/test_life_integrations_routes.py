@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from openjarvis.life import integrations as integrations_module
+from openjarvis.life.app_attest import AppAttestError
 from openjarvis.life.integrations import PROVIDERS, IntegrationsStore
 from openjarvis.server.life_routes import create_life_router
 
@@ -45,6 +46,16 @@ class _MemoryVault:
         self.stored.pop(ref, None)
 
 
+class _FakeAppAttestStore:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def verify_assertion(self, user_id, **kwargs):
+        if kwargs["assertion"] != "a" * 86:
+            raise AppAttestError("invalid assertion")
+        self.calls.append({"user_id": user_id, **kwargs})
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in ALL_ENV_VARS:
@@ -55,10 +66,12 @@ def _clean_env(monkeypatch):
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENJARVIS_LIFE_OPEN_SIGNUP", "1")
     app = FastAPI()
-    router = create_life_router(str(tmp_path / "life.db"))
+    app_attest = _FakeAppAttestStore()
+    router = create_life_router(str(tmp_path / "life.db"), app_attest_store=app_attest)
     app.include_router(router)
     with TestClient(app) as test_client:
         test_client.life = router.life_context
+        test_client.app_attest = app_attest
         yield test_client
     router.life_context.close()
 
@@ -82,6 +95,15 @@ def _configure_google(monkeypatch) -> None:
     for name, value in GOOGLE_ENV.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(integrations_module, "OAUTH_CALLBACK_IMPLEMENTED", True)
+
+
+def _app_attest_proof() -> dict:
+    return {
+        "challenge_id": "calendar-challenge-1234",
+        "challenge": "c" * 43,
+        "key_id": "k" * 43,
+        "assertion": "a" * 86,
+    }
 
 
 def _catalog_entry(client, auth, provider: str) -> dict:
@@ -109,6 +131,17 @@ def _seed_connected_gmail(client, auth, monkeypatch) -> None:
 def test_every_integration_route_requires_a_bearer_token(client):
     assert client.get("/v1/life/integrations").status_code == 401
     assert client.post("/v1/life/integrations/gmail/connect").status_code == 401
+    assert (
+        client.post(
+            "/v1/life/integrations/apple_calendar/device-grant",
+            json={
+                "granted_scopes": ["events.read", "events.write"],
+                "device_id": "ios-device-1234",
+                "device_label": "iPhone",
+            },
+        ).status_code
+        == 401
+    )
     assert client.delete("/v1/life/integrations/gmail").status_code == 401
 
 
@@ -180,6 +213,96 @@ def test_connect_returns_an_authorize_url_and_stays_honest(client, auth, monkeyp
     entry = _catalog_entry(client, auth, "gmail")
     assert entry["connection"] is None
     assert entry["pending_auth"] == {"expires_at": body["expires_at"]}
+
+
+# -- Autorizacao nativa ------------------------------------------------------
+
+
+def test_apple_calendar_device_grant_is_registered_for_the_current_tenant(client, auth):
+    response = client.post(
+        "/v1/life/integrations/apple_calendar/device-grant",
+        headers=auth,
+        json={
+            "granted_scopes": ["events.read", "events.write"],
+            "device_id": "ios-device-1234",
+            "device_label": "iPhone",
+            "app_attest": _app_attest_proof(),
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["provider"] == "apple_calendar"
+    assert body["connection"]["status"] == "connected"
+    assert body["connection"]["granted_scopes"] == [
+        "events.read",
+        "events.write",
+    ]
+    assert body["connection"]["has_credential"] is False
+    assert client.app_attest.calls[-1]["purpose"] == "device_grant"
+
+    other = _register(client, "bruna-calendar@exemplo.com")
+    assert _catalog_entry(client, other, "apple_calendar")["connection"] is None
+    assert (
+        _catalog_entry(client, auth, "apple_calendar")["connection"]["status"]
+        == "connected"
+    )
+
+
+def test_device_grant_rejects_health_until_a_healthkit_bridge_exists(client, auth):
+    response = client.post(
+        "/v1/life/integrations/apple_health/device-grant",
+        headers=auth,
+        json={
+            "granted_scopes": ["steps.read"],
+            "device_id": "ios-device-1234",
+            "device_label": "iPhone",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "HealthKit" in response.json()["detail"]
+    assert _catalog_entry(client, auth, "apple_health")["connection"] is None
+
+
+def test_calendar_device_grant_rejects_a_partial_or_forged_scope_set(client, auth):
+    response = client.post(
+        "/v1/life/integrations/apple_calendar/device-grant",
+        headers=auth,
+        json={
+            "granted_scopes": ["events.read"],
+            "device_id": "ios-device-1234",
+            "device_label": "iPhone",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "completo" in response.json()["detail"].lower()
+    assert _catalog_entry(client, auth, "apple_calendar")["connection"] is None
+
+
+def test_device_grant_rejects_non_device_and_unknown_providers(client, auth):
+    body = {
+        "granted_scopes": ["events.read"],
+        "device_id": "ios-device-1234",
+        "device_label": "iPhone",
+    }
+    assert (
+        client.post(
+            "/v1/life/integrations/gmail/device-grant",
+            headers=auth,
+            json=body,
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            "/v1/life/integrations/unknown/device-grant",
+            headers=auth,
+            json=body,
+        ).status_code
+        == 404
+    )
 
 
 # -- Desconectar -------------------------------------------------------------

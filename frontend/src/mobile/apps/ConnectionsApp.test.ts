@@ -1,13 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   IntegrationConnection,
   IntegrationProvider,
 } from '../types';
 import {
   connectionsHeadline,
+  disconnectProvider,
   formatRelativeTime,
   ledTone,
   presentProvider,
+  showGenericDisconnect,
 } from './ConnectionsApp';
 
 const NOW = new Date('2026-08-10T12:00:00Z');
@@ -153,12 +155,23 @@ describe('presentProvider', () => {
     expect(view.cta).toBe('none');
   });
 
-  it('Apple Health diz "No iPhone" em vez de fingir um Conectar', () => {
+  it('Apple Calendar oferece a autorizacao nativa sem fingir OAuth', () => {
+    const view = presentProvider(
+      provider({ id: 'apple_calendar', availability: 'device_only' }),
+      NOW,
+    );
+    expect(view.statusLabel).toBe('No iPhone');
+    expect(view.cta).toBe('device');
+    expect(view.ctaLabel).toBe('Autorizar calendário');
+  });
+
+  it('Apple Health continua indisponivel enquanto nao existe bridge HealthKit', () => {
     const view = presentProvider(
       provider({ id: 'apple_health', availability: 'device_only' }),
       NOW,
     );
-    expect(view.statusLabel).toBe('No iPhone');
+    expect(view.statusLabel).toBe('Ainda não disponível');
+    expect(view.detail).toContain('HealthKit');
     expect(view.cta).toBe('none');
   });
 
@@ -171,6 +184,54 @@ describe('presentProvider', () => {
     expect(view.detail).toContain('provedor homologado');
     expect(view.cta).toBe('none');
     expect(view.active).toBe(false);
+  });
+});
+
+describe('showGenericDisconnect', () => {
+  it('hides the duplicate action for WhatsApp but keeps it for other providers', () => {
+    expect(
+      showGenericDisconnect(
+        provider({ id: 'whatsapp', connection: connection() }),
+      ),
+    ).toBe(false);
+    expect(showGenericDisconnect(provider({ connection: connection() }))).toBe(
+      true,
+    );
+  });
+});
+
+describe('disconnectProvider', () => {
+  it('clears account-bound native calendar receipts after server revocation', async () => {
+    const disconnect = vi.fn().mockResolvedValue({ result: 'revoked' });
+    const clearNativeReceipts = vi.fn().mockResolvedValue(undefined);
+
+    await disconnectProvider(
+      provider({ id: 'apple_calendar' }),
+      disconnect,
+      clearNativeReceipts,
+    );
+
+    expect(disconnect).toHaveBeenCalledWith('apple_calendar');
+    expect(clearNativeReceipts).toHaveBeenCalledOnce();
+    expect(disconnect.mock.invocationCallOrder[0]).toBeLessThan(
+      clearNativeReceipts.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not clear idempotency receipts when server revocation fails', async () => {
+    const error = new Error('HTTP 500');
+    const disconnect = vi.fn().mockRejectedValue(error);
+    const clearNativeReceipts = vi.fn();
+
+    await expect(
+      disconnectProvider(
+        provider({ id: 'apple_calendar' }),
+        disconnect,
+        clearNativeReceipts,
+      ),
+    ).rejects.toBe(error);
+
+    expect(clearNativeReceipts).not.toHaveBeenCalled();
   });
 });
 

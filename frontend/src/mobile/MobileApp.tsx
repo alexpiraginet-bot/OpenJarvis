@@ -1,13 +1,13 @@
 /**
  * The shell — one surface, three layers.
  *
- * The Jarvis core is the home screen; the springboard slides over it; an app
- * window opens over that. Nothing here changes the route, so the whole product
- * behaves like a phone rather than a website: you never leave, you go deeper
- * and come back.
+ * The springboard is the home screen and the Jarvis controls expand inside it.
+ * App windows are the only layer above that surface. Nothing here changes the
+ * route, so the whole product behaves like a phone rather than a website: you
+ * never leave, you go deeper and come back.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useReducer, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { AppWindow, type Tab } from './AppWindow';
 import { fetchMe, fetchToday, getToken, logout } from './api';
@@ -17,16 +17,30 @@ import {
 } from './apps/ConnectionsApp';
 import {
   BillsTab,
+  FinancialDocumentsTab,
   FinanceOverview,
   GoalsTab,
   TransactionsTab,
 } from './apps/FinanceApp';
-import { FitnessOverview, MeasurementsTab, WorkoutsTab } from './apps/FitnessApp';
+import {
+  CoachPlan,
+  CoachProfile,
+  CoachToday,
+  FitnessProgress,
+} from './apps/FitnessApp';
 import { PeopleTab, UpcomingTab } from './apps/FamilyApp';
+import {
+  HealthDocumentsTab,
+  HealthOverview,
+  HealthProfileTab,
+  HealthRecordsTab,
+} from './apps/HealthApp';
 import { HabitsToday, ManageHabits } from './apps/RoutineApp';
 import { ProjectsTab, TasksTab } from './apps/WorkApp';
 import { JarvisCore } from './JarvisCore';
 import { LoginScreen } from './LoginScreen';
+import { buildAppPresentationMotion } from './appMotion';
+import { initialMobileShellState, mobileShellReducer } from './mobileShell';
 import { Springboard } from './Springboard';
 import type { LifeUser, ShellAppId, Today } from './types';
 import { Button, Spinner } from './ui';
@@ -38,6 +52,7 @@ const TITLES: Record<ShellAppId, string> = {
   routine: 'Rotina',
   family: 'Família',
   work: 'Trabalho',
+  health: 'Saúde',
   connections: 'Conexões',
 };
 
@@ -47,17 +62,18 @@ const SPECIALISTS: Record<ShellAppId, string> = {
   routine: 'Chefe de gabinete IA',
   family: 'Concierge familiar IA',
   work: 'Assistente executivo IA',
+  health: 'Especialista de saúde IA',
   connections: 'Engenheiro de integrações IA',
 };
-
-type Layer = 'jarvis' | 'springboard';
 
 export default function MobileApp() {
   const reduceMotion = useReducedMotion();
   const [user, setUser] = useState<LifeUser | null>(null);
   const [checking, setChecking] = useState(true);
-  const [layer, setLayer] = useState<Layer>('jarvis');
-  const [openApp, setOpenApp] = useState<ShellAppId | null>(null);
+  const [shell, dispatchShell] = useReducer(
+    mobileShellReducer,
+    initialMobileShellState,
+  );
   const [tab, setTab] = useState('');
   const [today, setToday] = useState<Today | null>(null);
   const [loadingToday, setLoadingToday] = useState(false);
@@ -103,13 +119,12 @@ export default function MobileApp() {
   }, [user, refresh]);
 
   const handleOpenApp = useCallback((app: ShellAppId) => {
-    setOpenApp(app);
+    dispatchShell({ type: 'open_app', app });
     setTab('');
-    setLayer('springboard');
   }, []);
 
   const closeApp = useCallback(() => {
-    setOpenApp(null);
+    dispatchShell({ type: 'close_app' });
     // Coming back from an app is the moment badges are most likely stale.
     refresh();
   }, [refresh]);
@@ -118,8 +133,7 @@ export default function MobileApp() {
     await logout();
     setUser(null);
     setToday(null);
-    setLayer('jarvis');
-    setOpenApp(null);
+    dispatchShell({ type: 'reset' });
   }
 
   if (checking) {
@@ -136,7 +150,7 @@ export default function MobileApp() {
         <LoginScreen
           onAuth={(authenticated) => {
             setUser(authenticated);
-            setLayer('jarvis');
+            dispatchShell({ type: 'reset' });
           }}
         />
       </div>
@@ -144,89 +158,85 @@ export default function MobileApp() {
   }
 
   const currency = today?.currency ?? user.currency;
-  const tabs: Tab[] = openApp ? buildTabs(openApp, currency, refresh) : [];
+  const tabs: Tab[] = shell.openApp
+    ? buildTabs(shell.openApp, currency, refresh)
+    : [];
   const activeTab = tab || tabs[0]?.id || '';
+  const appPresentation = buildAppPresentationMotion(
+    Boolean(reduceMotion),
+    Boolean(shell.openApp),
+  );
 
   return (
     <div className="oj-mobile" translate="no">
-      <AnimatePresence initial={false} mode="sync">
-        <motion.div
-          key={layer}
-          className="oj-shell-layer"
-          initial={
-            reduceMotion
-              ? false
-              : layer === 'springboard'
-                ? { opacity: 0, scale: 0.965, y: '7%' }
-                : { opacity: 0, scale: 1.025, y: '-4%' }
+      <motion.div
+        className="oj-shell-layer"
+        data-app-open={Boolean(shell.openApp)}
+        aria-hidden={Boolean(shell.openApp)}
+        animate={appPresentation.shell.animate}
+        transition={appPresentation.shell.transition}
+      >
+        <Springboard
+          today={today}
+          loading={loadingToday}
+          error={error}
+          userName={user.name}
+          onOpenApp={handleOpenApp}
+          onAskJarvis={() => dispatchShell({ type: 'open_assistant' })}
+          assistantOpen={shell.assistantOpen}
+          assistantPanel={
+            shell.assistantOpen ? (
+              <motion.div
+                className="oj-jarvis-inline-content"
+                initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.985 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={
+                  reduceMotion
+                    ? { duration: 0 }
+                    : { type: 'spring', stiffness: 430, damping: 40, mass: 0.78 }
+                }
+              >
+                <JarvisCore
+                  today={today}
+                  userId={user.id}
+                  contextApp={shell.assistantContext}
+                  variant="embedded"
+                  onClose={() => dispatchShell({ type: 'close_assistant' })}
+                  onRefresh={refresh}
+                />
+              </motion.div>
+            ) : null
           }
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={
-            reduceMotion
-              ? { opacity: 1 }
-              : layer === 'springboard'
-                ? { opacity: 0, scale: 0.985, y: '4%' }
-                : { opacity: 0, scale: 1.02, y: '-3%' }
-          }
-          transition={
-            reduceMotion
-              ? { duration: 0 }
-              : { type: 'spring', stiffness: 430, damping: 42, mass: 0.82 }
-          }
-        >
-          {layer === 'jarvis' ? (
-            <JarvisCore
-              today={today}
-              onOpenSpringboard={() => setLayer('springboard')}
-              onRefresh={refresh}
-            />
-          ) : (
-            <Springboard
-              today={today}
-              loading={loadingToday}
-              error={error}
-              userName={user.name}
-              onOpenApp={handleOpenApp}
-              onAskJarvis={() => setLayer('jarvis')}
-              onLogout={handleLogout}
-            />
-          )}
-        </motion.div>
-      </AnimatePresence>
+          onLogout={handleLogout}
+        />
+      </motion.div>
 
       <AnimatePresence initial={false}>
-        {openApp && (
+        {shell.openApp && (
           <motion.div
-            key={openApp}
+            key={shell.openApp}
             className="oj-app-layer"
-            initial={
-              reduceMotion
-                ? false
-                : { opacity: 0, y: '100%', scale: 0.94, borderRadius: 32 }
-            }
-            animate={{ opacity: 1, y: 0, scale: 1, borderRadius: 0 }}
-            exit={
-              reduceMotion
-                ? { opacity: 0 }
-                : { opacity: 0, y: '22%', scale: 0.96, borderRadius: 32 }
-            }
-            transition={
-              reduceMotion
-                ? { duration: 0 }
-                : { type: 'spring', stiffness: 390, damping: 38, mass: 0.88 }
-            }
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${TITLES[shell.openApp]} — ${SPECIALISTS[shell.openApp]}`}
+            initial={appPresentation.sheet.initial}
+            animate={appPresentation.sheet.animate}
+            exit={appPresentation.sheet.exit}
+            transition={appPresentation.sheet.transition}
           >
             <AppWindow
-              title={TITLES[openApp]}
-              specialist={SPECIALISTS[openApp]}
+              title={TITLES[shell.openApp]}
+              specialist={SPECIALISTS[shell.openApp]}
               tabs={tabs}
               activeTab={activeTab}
               onTabChange={setTab}
               onClose={closeApp}
-              onAskJarvis={() => {
-                setOpenApp(null);
-                setLayer('jarvis');
-              }}
+              onAskJarvis={() =>
+                dispatchShell({
+                  type: 'open_assistant',
+                  context: shell.openApp ?? undefined,
+                })
+              }
             />
           </motion.div>
         )}
@@ -262,6 +272,13 @@ function buildTabs(
           render: () => <FinanceOverview currency={currency} />,
         },
         {
+          id: 'documentos',
+          label: 'Documentos',
+          render: () => (
+            <FinancialDocumentsTab currency={currency} onChanged={onChanged} />
+          ),
+        },
+        {
           id: 'contas',
           label: 'A pagar',
           render: () => <BillsTab currency={currency} onChanged={onChanged} />,
@@ -281,13 +298,22 @@ function buildTabs(
       ];
     case 'fitness':
       return [
-        { id: 'semana', label: 'Semana', render: () => <FitnessOverview /> },
         {
-          id: 'treinos',
-          label: 'Treinos',
-          render: () => <WorkoutsTab onChanged={onChanged} />,
+          id: 'hoje',
+          label: 'Hoje',
+          render: () => <CoachToday onChanged={onChanged} />,
         },
-        { id: 'medidas', label: 'Medidas', render: () => <MeasurementsTab /> },
+        {
+          id: 'plano',
+          label: 'Plano',
+          render: () => <CoachPlan onChanged={onChanged} />,
+        },
+        { id: 'evolucao', label: 'Evolução', render: () => <FitnessProgress /> },
+        {
+          id: 'perfil',
+          label: 'Perfil',
+          render: () => <CoachProfile onChanged={onChanged} />,
+        },
       ];
     case 'routine':
       return [
@@ -319,6 +345,25 @@ function buildTabs(
           render: () => <TasksTab onChanged={onChanged} />,
         },
         { id: 'projetos', label: 'Projetos', render: () => <ProjectsTab /> },
+      ];
+    case 'health':
+      return [
+        { id: 'resumo', label: 'Resumo', render: () => <HealthOverview /> },
+        {
+          id: 'perfil',
+          label: 'Perfil',
+          render: () => <HealthProfileTab onChanged={onChanged} />,
+        },
+        {
+          id: 'registros',
+          label: 'Registros',
+          render: () => <HealthRecordsTab onChanged={onChanged} />,
+        },
+        {
+          id: 'documentos',
+          label: 'Exames',
+          render: () => <HealthDocumentsTab onChanged={onChanged} />,
+        },
       ];
     default:
       return [];

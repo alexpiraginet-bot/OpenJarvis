@@ -2,18 +2,22 @@
  * Voice for the Jarvis core screen: live microphone level, speech recognition
  * and spoken replies.
  *
- * Deliberately built on the browser's own Web Speech API rather than the
- * server's `/v1/speech` transcription route. The HUD has to react to the voice
- * *while it is being spoken* — a record-then-upload round trip cannot animate
- * anything, and the whole point of this screen is that it is alive. The
- * server-side path stays the right choice for the chat composer, which
- * transcribes a finished clip.
+ * Prefers OpenAI Realtime WebRTC for continuous speech-to-speech interaction,
+ * while the existing native and Web Speech paths remain fallbacks. Realtime is
+ * intentionally only the audio transport: final transcripts still go through
+ * the authoritative Life API so memory, tools and confirmation rules cannot be
+ * bypassed by the client.
  *
  * The analyser runs independently of recognition, so the visuals stay live even
  * where `SpeechRecognition` is unavailable (Firefox, some Android browsers).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  RealtimeVoiceSession,
+  supportsRealtimeVoice,
+  type RealtimeVoiceTransportState,
+} from './realtimeVoice';
 import { synthesizeJarvisVoice } from './voiceApi';
 
 /** Minimal shape of the Web Speech API — absent from lib.dom in this TS version. */
@@ -171,12 +175,17 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const analyserOwnsStreamRef = useRef(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const realtimeRef = useRef<RealtimeVoiceSession | null>(null);
+  const realtimeConnectingRef = useRef(false);
   const frameRef = useRef(0);
   const playbackFrameRef = useRef(0);
   const playbackRef = useRef<HTMLAudioElement | null>(null);
   const playbackUrlRef = useRef('');
   const voiceRequestRef = useRef<AbortController | null>(null);
+  const pendingRealtimeSpeechRef = useRef('');
+  const speakLegacyRef = useRef<(text: string) => void>(() => undefined);
   const wantListeningRef = useRef(false);
   const continuousRef = useRef(listeningMode === 'continuous');
   // Kept in a ref so the recognition callback never closes over a stale
@@ -186,7 +195,9 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
 
   const supported =
     typeof window !== 'undefined' &&
-    (getNativeVoiceHandler() !== null || getRecognitionCtor() !== null);
+    (supportsRealtimeVoice() ||
+      getNativeVoiceHandler() !== null ||
+      getRecognitionCtor() !== null);
 
   useEffect(() => {
     const onNativeVoice = (event: Event) => {
@@ -252,8 +263,11 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
 
   const teardownAudio = useCallback(() => {
     cancelAnimationFrame(frameRef.current);
-    streamRef.current?.getTracks().forEach((track) => track.stop());
+    if (analyserOwnsStreamRef.current) {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    }
     streamRef.current = null;
+    analyserOwnsStreamRef.current = false;
     void audioContextRef.current?.close().catch(() => undefined);
     audioContextRef.current = null;
     analyserRef.current = null;
@@ -283,10 +297,13 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     spectrumRef.current = new Uint8Array(BIN_COUNT);
   }, []);
 
-  const startAudio = useCallback(async () => {
+  const startAudio = useCallback(async (existingStream?: MediaStream) => {
     if (analyserRef.current) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream =
+      existingStream ??
+      (await navigator.mediaDevices.getUserMedia({ audio: true }));
     streamRef.current = stream;
+    analyserOwnsStreamRef.current = existingStream === undefined;
 
     const AudioCtor =
       window.AudioContext ??
@@ -319,9 +336,8 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     frameRef.current = requestAnimationFrame(tick);
   }, []);
 
-  const start = useCallback(() => {
+  const startLegacy = useCallback(() => {
     setError('');
-    wantListeningRef.current = true;
     cancelRemoteSpeech();
     window.speechSynthesis?.cancel();
 
@@ -420,9 +436,108 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     }
   }, [cancelRemoteSpeech, startAudio, teardownAudio]);
 
+  const handleRealtimeState = useCallback(
+    (nextState: RealtimeVoiceTransportState) => {
+      if (nextState === 'closed') {
+        teardownAudio();
+        if (!wantListeningRef.current) setStatus('idle');
+        return;
+      }
+      if (nextState === 'connecting') {
+        setStatus('thinking');
+        return;
+      }
+      setStatus(nextState);
+      if (nextState === 'listening') setError('');
+    },
+    [teardownAudio],
+  );
+
+  const startRealtime = useCallback(async () => {
+    if (realtimeRef.current || realtimeConnectingRef.current) return;
+    realtimeConnectingRef.current = true;
+    let session: RealtimeVoiceSession | null = null;
+    try {
+      session = RealtimeVoiceSession.forBrowser({
+        onState: handleRealtimeState,
+        onInterimTranscript: (text) => setInterim(text),
+        onFinalTranscript: (text) => {
+          wantListeningRef.current = continuousRef.current;
+          setTranscript(text);
+          setInterim('');
+          if (!continuousRef.current) session?.setCaptureEnabled(false);
+          onFinalRef.current(text);
+        },
+        onOutputDone: () => {
+          pendingRealtimeSpeechRef.current = '';
+          if (wantListeningRef.current) {
+            session?.setCaptureEnabled(true);
+            setStatus('listening');
+          } else {
+            if (realtimeRef.current === session) realtimeRef.current = null;
+            session?.close();
+            setStatus('idle');
+          }
+        },
+        onError: () => {
+          if (realtimeRef.current === session) realtimeRef.current = null;
+          const pendingSpeech = pendingRealtimeSpeechRef.current;
+          pendingRealtimeSpeechRef.current = '';
+          session?.close();
+          if (pendingSpeech) {
+            speakLegacyRef.current(pendingSpeech);
+          } else if (wantListeningRef.current) {
+            startLegacy();
+          }
+        },
+      });
+      realtimeRef.current = session;
+      await session.connect();
+      if (!wantListeningRef.current) {
+        realtimeRef.current = null;
+        session.close();
+        return;
+      }
+      const inputStream = session.inputStream;
+      if (inputStream) await startAudio(inputStream);
+    } catch (error) {
+      if (realtimeRef.current === session) realtimeRef.current = null;
+      session?.close();
+      logger(
+        `Realtime voice fallback: ${error instanceof Error ? error.name : 'unknown'}`,
+      );
+      if (wantListeningRef.current) startLegacy();
+    } finally {
+      realtimeConnectingRef.current = false;
+    }
+  }, [handleRealtimeState, startAudio, startLegacy]);
+
+  const start = useCallback(() => {
+    setError('');
+    wantListeningRef.current = true;
+    cancelRemoteSpeech();
+    window.speechSynthesis?.cancel();
+
+    const realtime = realtimeRef.current;
+    if (realtime?.ready) {
+      realtime.cancelResponse();
+      realtime.setCaptureEnabled(true);
+      setStatus('listening');
+      return;
+    }
+    if (supportsRealtimeVoice()) {
+      void startRealtime();
+      return;
+    }
+    startLegacy();
+  }, [cancelRemoteSpeech, startLegacy, startRealtime]);
+
   const stop = useCallback(() => {
     wantListeningRef.current = false;
+    pendingRealtimeSpeechRef.current = '';
     cancelRemoteSpeech();
+    realtimeRef.current?.close();
+    realtimeRef.current = null;
     getNativeVoiceHandler()?.postMessage({ action: 'stop' });
     recognitionRef.current?.stop();
     recognitionRef.current = null;
@@ -447,7 +562,7 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
     [start, stop],
   );
 
-  const speak = useCallback((text: string) => {
+  const speakLegacy = useCallback((text: string) => {
     if (!text) return;
     cancelRemoteSpeech();
 
@@ -554,6 +669,24 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
         speakLocally();
       });
   }, [cancelRemoteSpeech, start]);
+  speakLegacyRef.current = speakLegacy;
+
+  const speak = useCallback(
+    (text: string) => {
+      if (!text) return;
+      const realtime = realtimeRef.current;
+      if (realtime?.ready) {
+        pendingRealtimeSpeechRef.current = text;
+        if (realtime.speakAuthoritativeAnswer(text)) {
+          setStatus('speaking');
+          return;
+        }
+        pendingRealtimeSpeechRef.current = '';
+      }
+      speakLegacy(text);
+    },
+    [speakLegacy],
+  );
 
   const reset = useCallback(() => {
     setTranscript('');
@@ -564,6 +697,9 @@ export function useVoice(onFinalTranscript: (text: string) => void): VoiceState 
   useEffect(
     () => () => {
       wantListeningRef.current = false;
+      pendingRealtimeSpeechRef.current = '';
+      realtimeRef.current?.close();
+      realtimeRef.current = null;
       recognitionRef.current?.abort();
       recognitionRef.current = null;
       cancelRemoteSpeech();

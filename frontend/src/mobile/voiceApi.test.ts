@@ -86,3 +86,56 @@ describe('synthesizeJarvisVoice', () => {
     });
   });
 });
+
+describe('requestRealtimeVoiceToken', () => {
+  it('requests a tenant-authenticated ephemeral session without exposing the server key', async () => {
+    localStorage.setItem('oj-life-token', 'life-user-token');
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          client_secret: 'ek_test_ephemeral',
+          expires_at: 1_800_000_000,
+          model: 'gpt-realtime-2.1',
+          voice: 'cedar',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+    const { requestRealtimeVoiceToken } = await import('./voiceApi');
+
+    const result = await requestRealtimeVoiceToken();
+
+    expect(result).toEqual({
+      clientSecret: 'ek_test_ephemeral',
+      expiresAt: 1_800_000_000,
+      model: 'gpt-realtime-2.1',
+      voice: 'cedar',
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/v1/life/voice/realtime/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer life-user-token',
+      },
+      body: '{}',
+      signal: undefined,
+    });
+  });
+
+  it('rejects an incomplete provider response', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ model: 'gpt-realtime-2.1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const { requestRealtimeVoiceToken } = await import('./voiceApi');
+
+    await expect(requestRealtimeVoiceToken()).rejects.toMatchObject({
+      status: 502,
+    });
+  });
+});

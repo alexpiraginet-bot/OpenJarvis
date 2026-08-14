@@ -44,6 +44,8 @@
     </dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>O Jarvis usa o microfone quando você toca para falar e anima o núcleo em tempo real.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>O Jarvis usa seu calendário para mostrar compromissos e criar eventos somente após sua confirmação.</string>
     <key>NSFaceIDUsageDescription</key>
     <string>O Jarvis usa o Face ID para proteger seus dados pessoais, financeiros e de saúde.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

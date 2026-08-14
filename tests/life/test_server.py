@@ -57,3 +57,33 @@ def test_standalone_app_accepts_anthropic_as_only_cloud_provider(
 
     assert app.state.engine is engine
     assert app.state.config.model == "claude-haiku-4-5"
+
+
+def test_standalone_app_wires_injected_whatsapp_dependencies(tmp_path) -> None:
+    class Vault:
+        def store(self, user_id, channel, address):
+            return f"vault://{user_id}/{channel}/1"
+
+        def resolve(self, ref):
+            return "+5527999990001"
+
+        def discard(self, ref):
+            return None
+
+    class Channel:
+        def send(self, channel, content, **kwargs):
+            return True
+
+    app = create_life_app(
+        db_path=str(tmp_path / "life.db"),
+        serve_static=False,
+        channel_address_vault=Vault(),
+        channel_pepper=b"test-channel-pepper",
+        whatsapp_channel=Channel(),
+        whatsapp_verify_token="verify-token",
+        whatsapp_app_secret="app-secret",
+    )
+
+    paths = {route.path for route in app.routes}
+    assert "/v1/life/channels/whatsapp/link" in paths
+    assert "/v1/life/webhooks/whatsapp" in paths

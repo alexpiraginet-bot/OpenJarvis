@@ -253,11 +253,16 @@ class Database:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        """Keep nested domain writes inside one atomic transaction."""
+        """Keep nested domain writes atomic, even when inner errors are caught."""
         with self._lock:
             outermost = self._transaction_depth == 0
             if outermost and self._backend == SQLITE:
                 self._conn.execute("BEGIN IMMEDIATE")
+            savepoint = (
+                "" if outermost else f"openjarvis_nested_{self._transaction_depth}"
+            )
+            if savepoint:
+                self.execute(f"SAVEPOINT {savepoint}")
             self._transaction_depth += 1
             try:
                 yield
@@ -265,11 +270,19 @@ class Database:
                 self._transaction_depth -= 1
                 if outermost:
                     self._conn.rollback()
+                else:
+                    # PostgreSQL permits ROLLBACK TO while the transaction is in
+                    # its failed state. Releasing afterwards prevents a later
+                    # sibling scope from inheriting this savepoint name.
+                    self.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
             else:
                 self._transaction_depth -= 1
                 if outermost:
                     self._conn.commit()
+                else:
+                    self.execute(f"RELEASE SAVEPOINT {savepoint}")
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> Any:
         """Run a statement and return a cursor.
@@ -314,7 +327,8 @@ class Database:
                 for statement in script:
                     cursor = self._conn.cursor()
                     cursor.execute(translate(statement))
-                self._conn.commit()
+                if self._transaction_depth == 0:
+                    self._conn.commit()
             return
         for statement in script:
             self.execute(statement)

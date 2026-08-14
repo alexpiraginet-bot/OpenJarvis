@@ -7,6 +7,9 @@ mangled on the way to psycopg.
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
+
 import pytest
 
 from openjarvis.life.db import (
@@ -186,6 +189,24 @@ def test_rollback_discards_the_transaction(db):
     assert db.execute("SELECT COUNT(*) AS c FROM t").fetchone()["c"] == 0
 
 
+def test_caught_nested_transaction_failure_rolls_back_to_savepoint(db):
+    with db.transaction():
+        db.execute("INSERT INTO t (id, n, s) VALUES (?, ?, ?)", ("outer", 1, "ok"))
+        try:
+            with db.transaction():
+                db.execute(
+                    "INSERT INTO t (id, n, s) VALUES (?, ?, ?)",
+                    ("inner", 2, "rollback"),
+                )
+                raise ValueError("domain failure")
+        except ValueError:
+            pass
+        db.execute("INSERT INTO t (id, n, s) VALUES (?, ?, ?)", ("after", 3, "ok"))
+
+    rows = db.execute("SELECT id FROM t ORDER BY id").fetchall()
+    assert [row["id"] for row in rows] == ["after", "outer"]
+
+
 def test_sqlite_backend_is_reported(db):
     assert db.backend == SQLITE
 
@@ -213,3 +234,44 @@ def test_missing_psycopg_raises_a_actionable_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", refuse)
     with pytest.raises(DatabaseError, match="life-postgres"):
         Database("postgres://user:pw@host/db")
+
+
+def test_postgres_executescript_does_not_commit_an_enclosing_transaction():
+    """A schema failure after DDL must roll the whole PostgreSQL migration back."""
+
+    class _Cursor:
+        description = None
+
+        def execute(self, _statement):
+            return None
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.rollbacks = 0
+
+        @contextmanager
+        def pipeline(self):
+            yield
+
+        def cursor(self):
+            return _Cursor()
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    connection = _Connection()
+    database = object.__new__(Database)
+    database._backend = POSTGRES
+    database._lock = threading.RLock()
+    database._transaction_depth = 0
+    database._conn = connection
+
+    with database.transaction():
+        database.executescript(["CREATE TABLE example (id TEXT)"])
+        assert connection.commits == 0
+
+    assert connection.commits == 1

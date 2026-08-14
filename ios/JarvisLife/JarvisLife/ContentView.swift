@@ -14,14 +14,14 @@ struct ContentView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let appURL = JarvisConfiguration.appURL() {
+            if biometricLock.isUnlocked, let appURL = JarvisConfiguration.appURL() {
                 JarvisWebView(
                     appURL: appURL,
                     reloadID: reloadID,
                     loadError: $loadError
                 )
                 .ignoresSafeArea()
-            } else {
+            } else if biometricLock.isUnlocked {
                 FailureView(
                     title: "Configuração incompleta",
                     message: "O endereço seguro do Jarvis não foi configurado neste build.",

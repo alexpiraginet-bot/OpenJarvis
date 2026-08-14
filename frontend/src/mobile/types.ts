@@ -5,7 +5,13 @@
  * and neither should anything here. Format at the edge with `formatMoney`.
  */
 
-export type AppId = 'finance' | 'fitness' | 'routine' | 'family' | 'work';
+export type AppId =
+  | 'finance'
+  | 'fitness'
+  | 'routine'
+  | 'family'
+  | 'work'
+  | 'health';
 
 /**
  * Apps abríveis pelo shell. `connections` não é um domínio de dados (não tem
@@ -69,6 +75,7 @@ export interface Today {
   routine: { completed: number; total: number; pending: string[] };
   family: { upcoming: FamilyUpcoming[] };
   work: { open_count: number; overdue_count: number; due_today_count: number };
+  health: HealthSummary;
 }
 
 /** Every record carries these; the rest varies by table. */
@@ -135,6 +142,28 @@ export interface FinanceSummary {
   budgets: BudgetStatus[];
 }
 
+export interface FinancialCandidate {
+  kind: 'expense' | 'income';
+  amount_cents: number;
+  description: string;
+  category: string;
+  occurred_on: string;
+  confidence: number;
+}
+
+export interface FinancialDocument extends BaseRecord {
+  filename: string;
+  content_type: string;
+  sha256: string;
+  document_kind: 'receipt' | 'statement' | 'unknown';
+  status: 'review_required';
+  analysis: {
+    document_kind: 'receipt' | 'statement' | 'unknown';
+    candidates: FinancialCandidate[];
+  };
+  proposal_ids: string[];
+}
+
 export interface Workout extends BaseRecord {
   name: string;
   scheduled_on: string;
@@ -170,6 +199,164 @@ export interface FitnessSummary {
   days_since_last: number | null;
   personal_records: Array<{ exercise: string; weight_kg: number; reps: number }>;
   latest_measurement: Measurement | null;
+}
+
+export type TrainingGoal =
+  | 'general_fitness'
+  | 'endurance'
+  | 'performance'
+  | 'technique'
+  | 'strength'
+  | 'hypertrophy'
+  | 'mobility'
+  | '5k'
+  | '10k'
+  | 'half_marathon';
+export type TrainingLevel = 'beginner' | 'intermediate' | 'advanced';
+export type TrainingSport =
+  | 'running'
+  | 'canoeing'
+  | 'cycling'
+  | 'swimming'
+  | 'strength'
+  | 'mobility'
+  | 'functional'
+  | 'walking'
+  | 'hiking'
+  | 'rowing';
+
+export interface TrainingProfile extends BaseRecord {
+  primary_sport: TrainingSport;
+  secondary_sports: TrainingSport[];
+  primary_goal: TrainingGoal;
+  target_distance_km: number;
+  target_date: string | null;
+  level: TrainingLevel;
+  weekly_days: number;
+  available_weekdays: number[];
+  session_minutes: number;
+  current_weekly_km: number;
+  longest_recent_run_km: number;
+  equipment: string[];
+  limitations: string;
+}
+
+export type TrainingProfileInput = Omit<
+  TrainingProfile,
+  keyof BaseRecord | 'target_date'
+> & { target_date: string | null };
+
+export interface TrainingPlan extends BaseRecord {
+  profile_id: string;
+  name: string;
+  primary_sport: TrainingSport;
+  goal: TrainingGoal;
+  start_on: string;
+  end_on: string;
+  weeks: number;
+  current_week: number;
+  status: 'active' | 'replaced' | 'completed';
+  source: string;
+}
+
+export interface TrainingSession extends BaseRecord {
+  plan_id: string;
+  workout_id: string;
+  scheduled_on: string;
+  week_index: number;
+  day_index: number;
+  title: string;
+  sport: TrainingSport;
+  session_type: 'easy' | 'quality' | 'strength' | 'recovery' | 'long';
+  objective: string;
+  rationale: string;
+  estimated_min: number;
+  target_rpe: number;
+  status: 'planned' | 'completed' | 'canceled';
+  adaptation_note: string;
+}
+
+export interface TrainingStep extends BaseRecord {
+  session_id: string;
+  step_index: number;
+  kind: string;
+  title: string;
+  instructions: string;
+  duration_sec: number;
+  distance_m: number;
+  target_pace_min_km: number;
+  target_rpe: number;
+  sets: number;
+  reps: number;
+  rest_sec: number;
+  alternative: string;
+}
+
+export interface TrainingCheckin extends BaseRecord {
+  session_id: string;
+  observed_at: string;
+  sleep_quality: number;
+  soreness: number;
+  stress: number;
+  motivation: number;
+  pain: number;
+  readiness_score: number;
+  recommendation:
+    | 'ready'
+    | 'reduce_load'
+    | 'recovery_only'
+    | 'stop_and_seek_care';
+  notes: string;
+}
+
+export interface TrainingFeedback extends BaseRecord {
+  session_id: string;
+  completed_at: string;
+  completion_pct: number;
+  actual_duration_min: number;
+  rpe: number;
+  energy: number;
+  pain: number;
+  notes: string;
+  adaptation: {
+    reason?: string;
+    factor?: number;
+    message?: string;
+    sessions?: Array<Record<string, unknown>>;
+  };
+}
+
+export interface CoachOverview {
+  profile: TrainingProfile | null;
+  active_plan: TrainingPlan | null;
+  sessions: TrainingSession[];
+  next_session: TrainingSession | null;
+}
+
+export interface CoachSessionDetail {
+  session: TrainingSession;
+  steps: TrainingStep[];
+  checkin: TrainingCheckin | null;
+  feedback: TrainingFeedback | null;
+  workout: Workout | null;
+}
+
+export interface TrainingCheckinInput {
+  sleep_quality: number;
+  soreness: number;
+  stress: number;
+  motivation: number;
+  pain: number;
+  notes: string;
+}
+
+export interface TrainingCompletionInput {
+  completion_pct: number;
+  actual_duration_min: number;
+  rpe: number;
+  energy: number;
+  pain: number;
+  notes: string;
 }
 
 export interface Habit extends BaseRecord {
@@ -234,6 +421,89 @@ export interface WorkSummary {
   projects: Project[];
 }
 
+export interface HealthProfile extends BaseRecord {
+  birth_date: string | null;
+  sex_at_birth: string;
+  height_cm: number;
+  blood_type: string;
+  goals: string;
+  emergency_contact: string;
+  consent_health_memory: number;
+}
+
+export interface HealthCondition extends BaseRecord {
+  name: string;
+  status: string;
+  diagnosed_on: string | null;
+  notes: string;
+  source: string;
+  confirmed_at: string | null;
+}
+
+export interface Medication extends BaseRecord {
+  name: string;
+  dose_text: string;
+  frequency: string;
+  started_on: string | null;
+  ended_on: string | null;
+  status: string;
+  notes: string;
+  source: string;
+  confirmed_at: string | null;
+}
+
+export interface Allergy extends BaseRecord {
+  substance: string;
+  reaction: string;
+  severity: string;
+  notes: string;
+  source: string;
+  confirmed_at: string | null;
+}
+
+export interface HealthObservation extends BaseRecord {
+  kind: string;
+  value: number;
+  unit: string;
+  observed_at: string;
+  source: string;
+  notes: string;
+}
+
+export interface HydrationLog extends BaseRecord {
+  amount_ml: number;
+  occurred_at: string;
+  source: string;
+}
+
+export interface NutritionLog extends BaseRecord {
+  meal_type: string;
+  description: string;
+  occurred_at: string;
+  source: string;
+}
+
+export interface HealthDocument extends BaseRecord {
+  name: string;
+  kind: string;
+  document_date: string | null;
+  provider: string;
+  status: string;
+  notes: string;
+  source: string;
+}
+
+export interface HealthSummary {
+  profile: HealthProfile | null;
+  active_conditions: HealthCondition[];
+  active_medications: Medication[];
+  allergies: Allergy[];
+  hydration_today_ml: number;
+  nutrition_today_count: number;
+  latest_observations: HealthObservation[];
+  documents: HealthDocument[];
+}
+
 // -- Integrações (`/v1/life/integrations`) -----------------------------------
 
 /** Camada 1 do estado: o que este deployment pode oferecer de verdade. */
@@ -293,4 +563,38 @@ export interface IntegrationsSummary {
 export interface IntegrationsOverview {
   providers: IntegrationProvider[];
   summary: IntegrationsSummary;
+}
+
+export interface WhatsAppChannelStatus {
+  id?: string;
+  channel?: 'whatsapp';
+  status: 'disconnected' | 'pending' | 'verified';
+  verified_at?: string;
+}
+
+export interface WhatsAppLinkPending {
+  status: 'pending';
+  expires_at: string;
+}
+
+export type WhatsAppBriefingSection =
+  | 'priorities'
+  | 'finance'
+  | 'fitness'
+  | 'routine'
+  | 'family'
+  | 'work'
+  | 'health'
+  | 'calendar'
+  | 'email'
+  | 'news';
+
+export interface WhatsAppBriefingPreference {
+  enabled: boolean;
+  time: string;
+  sections: WhatsAppBriefingSection[];
+  news_topics: string[];
+  /** Monday = 0, matching Python's local weekday contract. */
+  delivery_days: number[];
+  custom_instructions: string;
 }

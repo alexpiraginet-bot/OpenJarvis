@@ -26,11 +26,26 @@ import {
   Satellite,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
-import { useState } from 'react';
-import { connectIntegration, disconnectIntegration, fetchIntegrations } from '../api';
+import { useEffect, useState } from 'react';
+import {
+  connectIntegration,
+  disconnectIntegration,
+  fetchIntegrations,
+  fetchWhatsAppBriefing,
+  fetchWhatsAppChannel,
+  linkWhatsApp,
+  revokeWhatsApp,
+  saveWhatsAppBriefing,
+} from '../api';
+import {
+  clearCurrentAccountNativeCalendarReceiptCache,
+  connectNativeCalendar,
+} from '../nativeIntegrations';
 import type {
   IntegrationProvider,
   IntegrationsSummary,
+  WhatsAppBriefingPreference,
+  WhatsAppBriefingSection,
 } from '../types';
 import { Button, Empty, ListGroup, Row, Section, Sheet, useLoader } from '../ui';
 
@@ -56,7 +71,7 @@ export interface ProviderPresentation {
   /** Palavra do chip de status — sempre acompanhada do ponto colorido. */
   statusLabel: string;
   tone: StatusTone;
-  cta: 'connect' | 'reconnect' | 'none';
+  cta: 'connect' | 'reconnect' | 'device' | 'none';
   ctaLabel: string;
   /** Sublinha do cartão; vazia = usar a descrição do provedor. */
   detail: string;
@@ -177,12 +192,22 @@ export function presentProvider(
         active: false,
       };
     case 'device_only':
+      if (provider.id === 'apple_calendar') {
+        return {
+          statusLabel: 'No iPhone',
+          tone: 'accent',
+          cta: 'device',
+          ctaLabel: 'Autorizar calendário',
+          detail: 'Permissão completa concedida pelo sistema do iPhone.',
+          active: false,
+        };
+      }
       return {
-        statusLabel: 'No iPhone',
+        statusLabel: 'Ainda não disponível',
         tone: 'muted',
         cta: 'none',
         ctaLabel: '',
-        detail: 'Autorize pelo app iOS do Jarvis.',
+        detail: 'A ponte nativa HealthKit ainda não existe neste build.',
         active: false,
       };
     default:
@@ -254,6 +279,31 @@ export function connectionsHeadline(
       : 'Conecte Gmail, Agenda, Strava e mais';
   }
   return parts.join(' · ');
+}
+
+/** WhatsApp owns its revoke flow inside WhatsAppActivation. */
+export function showGenericDisconnect(provider: IntegrationProvider): boolean {
+  return (
+    provider.id !== 'whatsapp' &&
+    provider.connection !== null &&
+    provider.connection.status !== 'revoked'
+  );
+}
+
+export async function disconnectProvider(
+  provider: IntegrationProvider,
+  disconnect: typeof disconnectIntegration = disconnectIntegration,
+  clearNativeReceipts: () => Promise<void> =
+    clearCurrentAccountNativeCalendarReceiptCache,
+): Promise<void> {
+  await disconnect(provider.id);
+  if (provider.id !== 'apple_calendar') return;
+  try {
+    await clearNativeReceipts();
+  } catch {
+    // The server revocation is authoritative. Receipts also self-expire, so a
+    // local cleanup failure must not misreport the connection as still active.
+  }
 }
 
 // -- Painel do Springboard ----------------------------------------------------
@@ -343,6 +393,13 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
     setBusy(provider.id);
     setError('');
     try {
+      if (provider.auth.kind === 'device') {
+        await connectNativeCalendar(provider.id);
+        overview.reload();
+        onChanged?.();
+        setBusy('');
+        return;
+      }
       const intent = await connectIntegration(provider.id);
       // Redireciona para o consent oficial do provedor. "Conectada" só
       // aparece quando o backend confirmar a troca — na volta, o catálogo
@@ -358,7 +415,7 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
     setBusy(provider.id);
     setError('');
     try {
-      await disconnectIntegration(provider.id);
+      await disconnectProvider(provider);
       closeSheet();
       overview.reload();
       onChanged?.();
@@ -603,13 +660,15 @@ function ProviderDetail({
         </div>
       )}
 
+      {provider.id === 'whatsapp' && <WhatsAppActivation />}
+
       {provider.availability === 'device_only' && (
         <div className="oj-conn-block">
           <div className="oj-card-label">Como conectar</div>
           <p className="oj-conn-note">
-            A permissão é concedida no próprio iPhone, pela tela do sistema —
-            o servidor nunca guarda credencial de saúde. Abra o app iOS do
-            Jarvis e autorize o acesso ao Apple Health por lá.
+            {provider.id === 'apple_calendar'
+              ? 'Toque em Autorizar calendário. O iPhone abre a tela oficial do sistema; o servidor registra apenas que esta instalação recebeu acesso, nunca uma credencial.'
+              : 'A integração HealthKit ainda não foi implementada neste build. Nenhum dado de saúde será marcado como conectado antes de existir uma ponte nativa real.'}
           </p>
         </div>
       )}
@@ -627,12 +686,16 @@ function ProviderDetail({
       ) : (
         view.cta !== 'none' && (
           <Button disabled={busy} onClick={onConnect}>
-            {busy ? 'Abrindo…' : view.ctaLabel}
+            {busy
+              ? view.cta === 'device'
+                ? 'Solicitando…'
+                : 'Abrindo…'
+              : view.ctaLabel}
           </Button>
         )
       )}
 
-      {liveConnection && !provider.pending_auth && (
+      {showGenericDisconnect(provider) && !provider.pending_auth && (
         <div className="oj-conn-danger-zone">
           {confirmingDisconnect ? (
             <>
@@ -663,6 +726,318 @@ function ProviderDetail({
             </button>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function WhatsAppActivation() {
+  const channel = useLoader(fetchWhatsAppChannel);
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const status = channel.data?.status ?? 'disconnected';
+
+  async function activate() {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await linkWhatsApp(phone.trim());
+      setNotice(
+        'Código enviado pelo número oficial do Jarvis. Responda no WhatsApp somente com os seis dígitos.',
+      );
+      channel.reload();
+    } catch (exc) {
+      setError(
+        exc instanceof Error
+          ? exc.message
+          : 'Não foi possível iniciar a ativação.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setError('');
+    try {
+      await revokeWhatsApp();
+      setNotice('WhatsApp desconectado desta conta Jarvis.');
+      setPhone('');
+      channel.reload();
+    } catch (exc) {
+      setError(
+        exc instanceof Error ? exc.message : 'Não foi possível desconectar.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="oj-conn-block oj-wa-activation">
+      <div className="oj-card-label">Ativação do piloto oficial</div>
+      <div className={`oj-wa-status oj-wa-status--${status}`}>
+        <span />
+        {channel.loading
+          ? 'Verificando vínculo…'
+          : status === 'verified'
+            ? 'WhatsApp ativo'
+            : status === 'pending'
+              ? 'Aguardando seu código'
+              : 'Ainda não vinculado'}
+      </div>
+
+      <ol className="oj-conn-steps oj-wa-steps">
+        <li>Digite seu número com país e DDD, por exemplo +5527999990001.</li>
+        <li>O número oficial do Jarvis envia um código de seis dígitos.</li>
+        <li>Responda no WhatsApp somente com esse código para confirmar.</li>
+        <li>
+          Depois disso, converse, use ações rápidas e receba briefings e treinos
+          na mesma conversa.
+        </li>
+      </ol>
+
+      {status === 'verified' ? (
+        <>
+          <p className="oj-conn-note">
+            O Jarvis reconhece esta conta sem exibir nem guardar seu telefone
+            em texto aberto no banco operacional.
+          </p>
+          <Button variant="ghost" disabled={busy} onClick={disconnect}>
+            {busy ? 'Desconectando…' : 'Desconectar WhatsApp'}
+          </Button>
+          <WhatsAppBriefingSettings />
+        </>
+      ) : (
+        <>
+          <label className="oj-wa-field">
+            <span>Número com código do país</span>
+            <input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="+5527999990001"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+            />
+          </label>
+          <div className="oj-wa-actions">
+            <Button disabled={busy || phone.trim().length < 9} onClick={activate}>
+              {busy ? 'Enviando…' : 'Enviar código oficial'}
+            </Button>
+            {status === 'pending' && (
+              <Button variant="ghost" disabled={busy} onClick={channel.reload}>
+                Já respondi — verificar
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+
+      {notice && <div className="oj-wa-notice">{notice}</div>}
+      {(error || channel.error) && (
+        <div className="oj-conn-error-note">{error || channel.error}</div>
+      )}
+    </div>
+  );
+}
+
+const BRIEFING_SECTIONS: Array<{
+  id: WhatsAppBriefingSection;
+  label: string;
+}> = [
+  { id: 'priorities', label: 'Prioridades' },
+  { id: 'finance', label: 'Finanças' },
+  { id: 'fitness', label: 'Treino' },
+  { id: 'routine', label: 'Rotina' },
+  { id: 'family', label: 'Família' },
+  { id: 'work', label: 'Trabalho' },
+  { id: 'health', label: 'Saúde' },
+  { id: 'news', label: 'Notícias' },
+];
+
+const BRIEFING_DAYS = [
+  { id: 0, label: 'Seg' },
+  { id: 1, label: 'Ter' },
+  { id: 2, label: 'Qua' },
+  { id: 3, label: 'Qui' },
+  { id: 4, label: 'Sex' },
+  { id: 5, label: 'Sáb' },
+  { id: 6, label: 'Dom' },
+];
+
+function WhatsAppBriefingSettings() {
+  const preference = useLoader(fetchWhatsAppBriefing);
+  const [draft, setDraft] = useState<WhatsAppBriefingPreference | null>(null);
+  const [topics, setTopics] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!preference.data) return;
+    setDraft(preference.data);
+    setTopics(preference.data.news_topics.join('\n'));
+  }, [preference.data]);
+
+  function toggleSection(section: WhatsAppBriefingSection) {
+    if (!draft) return;
+    const selected = draft.sections.includes(section);
+    setDraft({
+      ...draft,
+      sections: selected
+        ? draft.sections.filter((item) => item !== section)
+        : [...draft.sections, section],
+    });
+  }
+
+  function toggleDay(day: number) {
+    if (!draft) return;
+    const selected = draft.delivery_days.includes(day);
+    const deliveryDays = selected
+      ? draft.delivery_days.filter((item) => item !== day)
+      : [...draft.delivery_days, day].sort();
+    if (deliveryDays.length > 0) setDraft({ ...draft, delivery_days: deliveryDays });
+  }
+
+  async function save() {
+    if (!draft) return;
+    setSaving(true);
+    setNotice('');
+    setError('');
+    try {
+      const saved = await saveWhatsAppBriefing({
+        ...draft,
+        news_topics: topics
+          .split(/[\n,]/)
+          .map((topic) => topic.trim())
+          .filter(Boolean),
+      });
+      setDraft(saved);
+      setTopics(saved.news_topics.join('\n'));
+      setNotice(
+        saved.enabled
+          ? `Briefing programado para ${saved.time}.`
+          : 'Briefing pausado. Suas preferências foram mantidas.',
+      );
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : 'Não foi possível salvar.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (preference.loading || !draft) {
+    return <div className="oj-wa-briefing-loading">Carregando briefing…</div>;
+  }
+
+  return (
+    <div className="oj-wa-briefing">
+      <div className="oj-wa-briefing-head">
+        <div>
+          <div className="oj-card-label">Briefing diário</div>
+          <p>Você escolhe quando chega e exatamente o que entra.</p>
+        </div>
+        <label className="oj-wa-switch">
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
+          />
+          <span aria-hidden="true" />
+          <b>{draft.enabled ? 'Ativo' : 'Pausado'}</b>
+        </label>
+      </div>
+
+      <label className="oj-wa-field oj-wa-time">
+        <span>Horário no seu fuso</span>
+        <input
+          type="time"
+          value={draft.time}
+          onChange={(event) => setDraft({ ...draft, time: event.target.value })}
+        />
+      </label>
+
+      <fieldset className="oj-wa-choice-group">
+        <legend>Dias de envio</legend>
+        <div className="oj-wa-days">
+          {BRIEFING_DAYS.map((day) => (
+            <button
+              type="button"
+              key={day.id}
+              className={draft.delivery_days.includes(day.id) ? 'is-selected' : ''}
+              aria-pressed={draft.delivery_days.includes(day.id)}
+              onClick={() => toggleDay(day.id)}
+            >
+              {day.label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset className="oj-wa-choice-group">
+        <legend>Conteúdo</legend>
+        <div className="oj-wa-section-grid">
+          {BRIEFING_SECTIONS.map((section) => (
+            <button
+              type="button"
+              key={section.id}
+              className={draft.sections.includes(section.id) ? 'is-selected' : ''}
+              aria-pressed={draft.sections.includes(section.id)}
+              onClick={() => toggleSection(section.id)}
+            >
+              {draft.sections.includes(section.id) && <Check size={13} />}
+              {section.label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
+      {draft.sections.includes('news') && (
+        <div className="oj-wa-news-config">
+          <label className="oj-wa-field">
+            <span>Assuntos de notícias — um por linha</span>
+            <textarea
+              rows={4}
+              maxLength={400}
+              placeholder={'mobilidade\ncarros por assinatura\ntecnologia e IA'}
+              value={topics}
+              onChange={(event) => setTopics(event.target.value)}
+            />
+            <small>
+              O Jarvis pesquisa no dia do envio e inclui as fontes usadas.
+            </small>
+          </label>
+
+          <label className="oj-wa-field">
+            <span>Preferências editoriais</span>
+            <textarea
+              rows={3}
+              maxLength={500}
+              placeholder="Ex.: seja direto, priorize o Brasil e destaque impactos financeiros."
+              value={draft.custom_instructions}
+              onChange={(event) =>
+                setDraft({ ...draft, custom_instructions: event.target.value })
+              }
+            />
+            <small>{draft.custom_instructions.length}/500</small>
+          </label>
+        </div>
+      )}
+
+      <Button
+        disabled={saving || draft.sections.length === 0}
+        onClick={save}
+      >
+        {saving ? 'Salvando…' : 'Salvar briefing'}
+      </Button>
+      {notice && <div className="oj-wa-notice">{notice}</div>}
+      {(error || preference.error) && (
+        <div className="oj-conn-error-note">{error || preference.error}</div>
       )}
     </div>
   );

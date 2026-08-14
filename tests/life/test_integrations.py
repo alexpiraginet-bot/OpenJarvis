@@ -24,10 +24,12 @@ from openjarvis.life.integrations import (
     IntegrationUnavailableError,
     UnknownProviderError,
 )
+from openjarvis.life.whatsapp import WhatsAppLifeStore
 
 EXPECTED_PROVIDERS = (
     "gmail",
     "google_calendar",
+    "apple_calendar",
     "outlook",
     "strava",
     "apple_health",
@@ -120,7 +122,7 @@ def _connect_gmail(store, vault, user, monkeypatch) -> dict:
 # -- Catálogo curado ---------------------------------------------------------
 
 
-def test_registry_curates_exactly_the_seven_providers():
+def test_registry_curates_exactly_the_eight_providers():
     assert tuple(PROVIDERS) == EXPECTED_PROVIDERS
 
 
@@ -146,6 +148,41 @@ def test_no_provider_is_born_connected(store, user):
     assert overview["summary"] == {"connected": 0, "attention": 0, "pending": 0}
 
 
+def test_verified_whatsapp_link_appears_in_central_connection_summary(
+    life, store, user
+):
+    class AddressVault:
+        def __init__(self):
+            self.value = ""
+
+        def store(self, user_id, channel, address):
+            self.value = address
+            return "vault://whatsapp/1"
+
+        def resolve(self, ref):
+            return self.value
+
+        def discard(self, ref):
+            self.value = ""
+
+    whatsapp = WhatsAppLifeStore(
+        life,
+        pepper=b"integration-test-pepper",
+        vault=AddressVault(),
+        code_factory=lambda: "731904",
+    )
+    challenge = whatsapp.begin_link(user.id, "+5527999990001")
+    whatsapp.verify_link("+5527999990001", challenge.code)
+
+    overview = store.overview(user.id)
+    entry = next(item for item in overview["providers"] if item["id"] == "whatsapp")
+
+    assert entry["connection"]["status"] == "connected"
+    assert entry["connection"]["account_label"] == "WhatsApp oficial"
+    assert entry["connection"]["has_credential"] is False
+    assert overview["summary"]["connected"] == 1
+
+
 def test_availability_is_fail_closed_without_app_config(store, user):
     entry = _provider_entry(store, user.id, "gmail")
     assert entry["availability"] == "needs_setup"
@@ -167,6 +204,10 @@ def test_availability_reflects_configuration(store, user, monkeypatch):
     assert _provider_entry(store, user.id, "strava")["availability"] == "needs_setup"
     assert (
         _provider_entry(store, user.id, "apple_health")["availability"] == "device_only"
+    )
+    assert (
+        _provider_entry(store, user.id, "apple_calendar")["availability"]
+        == "device_only"
     )
     assert _provider_entry(store, user.id, "whatsapp")["availability"] == "coming_soon"
     assert (
@@ -196,7 +237,7 @@ def test_begin_authorization_rejects_unknown_provider(store, user):
 
 
 def test_begin_authorization_fails_closed_for_unavailable_providers(store, user):
-    for provider in ("whatsapp", "open_finance", "apple_health"):
+    for provider in ("whatsapp", "open_finance", "apple_health", "apple_calendar"):
         with pytest.raises(IntegrationUnavailableError):
             store.begin_authorization(user.id, provider)
 
@@ -455,6 +496,7 @@ def test_device_grant_connects_apple_health_without_server_credentials(store, us
         user.id,
         "apple_health",
         granted=["passos", "sono", "frequência cardíaca"],
+        device_id="device-health-1234",
         device_label="iPhone de Alex",
     )
     assert connection["status"] == "connected"
@@ -462,9 +504,43 @@ def test_device_grant_connects_apple_health_without_server_credentials(store, us
     assert connection["account_label"] == "iPhone de Alex"
 
 
+def test_device_grant_connects_apple_calendar_without_server_credentials(store, user):
+    connection = store.register_device_grant(
+        user.id,
+        "apple_calendar",
+        granted=["events.read", "events.write"],
+        device_id="device-calendar-1234",
+        device_label="iPhone de Alex",
+    )
+    assert connection["status"] == "connected"
+    assert connection["has_credential"] is False
+    assert store.is_connected(user.id, "apple_calendar") is True
+    assert (
+        store.is_device_connected(
+            user.id,
+            "apple_calendar",
+            "device-calendar-1234",
+            required_scopes=("events.write",),
+        )
+        is True
+    )
+    assert (
+        store.is_device_connected(
+            user.id,
+            "apple_calendar",
+            "another-device-1234",
+            required_scopes=("events.write",),
+        )
+        is False
+    )
+    assert store.is_connected(user.id, "apple_health") is False
+
+
 def test_device_grant_is_only_for_device_providers(store, user):
     with pytest.raises(IntegrationsError):
-        store.register_device_grant(user.id, "gmail", granted=["x"])
+        store.register_device_grant(
+            user.id, "gmail", granted=["x"], device_id="device-gmail-1234"
+        )
 
 
 # -- Sincronização e erros ---------------------------------------------------

@@ -17,6 +17,10 @@ struct JarvisWebView: UIViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(context.coordinator, name: "jarvisVoice")
+        configuration.userContentController.add(
+            context.coordinator,
+            name: "jarvisIntegrations"
+        )
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -39,6 +43,9 @@ struct JarvisWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: "jarvisVoice"
         )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "jarvisIntegrations"
+        )
         coordinator.stopVoice()
     }
 
@@ -48,7 +55,10 @@ struct JarvisWebView: UIViewRepresentable {
         private weak var webView: WKWebView?
         private var lastReloadID: Int?
         private lazy var voice = NativeSpeechController { [weak self] event in
-            self?.send(event: event)
+            self?.send(event: event, browserEvent: "jarvis-native-voice")
+        }
+        private lazy var integrations = NativeIntegrationController { [weak self] event in
+            self?.send(event: event, browserEvent: "jarvis-native-integration")
         }
 
         init(appURL: URL, loadError: Binding<String?>) {
@@ -80,24 +90,45 @@ struct JarvisWebView: UIViewRepresentable {
             didReceive message: WKScriptMessage
         ) {
             guard
-                message.name == "jarvisVoice",
+                message.frameInfo.isMainFrame,
+                isTrustedOrigin(message.frameInfo.securityOrigin),
                 let payload = message.body as? [String: Any],
                 let action = payload["action"] as? String
             else {
                 return
             }
 
-            switch action {
-            case "start":
-                voice.start()
-            case "stop":
-                voice.stop()
-            case "speak":
-                guard let text = payload["text"] as? String else { return }
-                voice.speak(text)
+            switch message.name {
+            case "jarvisVoice":
+                switch action {
+                case "start":
+                    voice.start()
+                case "stop":
+                    voice.stop()
+                case "speak":
+                    guard let text = payload["text"] as? String else { return }
+                    voice.speak(text)
+                default:
+                    break
+                }
+            case "jarvisIntegrations":
+                integrations.handle(payload)
             default:
-                break
+                return
             }
+        }
+
+        private func isTrustedOrigin(_ origin: WKSecurityOrigin) -> Bool {
+            guard
+                let scheme = appURL.scheme?.lowercased(),
+                let host = appURL.host?.lowercased(),
+                origin.protocol.lowercased() == scheme,
+                origin.host.lowercased() == host
+            else {
+                return false
+            }
+            let expectedPort = appURL.port ?? (scheme == "https" ? 443 : 80)
+            return origin.port == expectedPort
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -128,7 +159,7 @@ struct JarvisWebView: UIViewRepresentable {
             guard
                 navigationAction.targetFrame?.isMainFrame == true,
                 let destination = navigationAction.request.url,
-                destination.host != appURL.host
+                !isTrustedNavigation(destination)
             else {
                 decisionHandler(.allow)
                 return
@@ -140,13 +171,24 @@ struct JarvisWebView: UIViewRepresentable {
             decisionHandler(.cancel)
         }
 
+        private func isTrustedNavigation(_ destination: URL) -> Bool {
+            destination.scheme?.lowercased() == appURL.scheme?.lowercased()
+                && destination.host?.lowercased() == appURL.host?.lowercased()
+                && (destination.port ?? defaultPort(destination.scheme))
+                    == (appURL.port ?? defaultPort(appURL.scheme))
+        }
+
+        private func defaultPort(_ scheme: String?) -> Int {
+            scheme?.lowercased() == "https" ? 443 : 80
+        }
+
         private func show(_ error: Error) {
             let nsError = error as NSError
             guard nsError.code != NSURLErrorCancelled else { return }
             loadError.wrappedValue = "Não consegui conectar ao núcleo do Jarvis. Verifique a rede e tente novamente."
         }
 
-        private func send(event: [String: Any]) {
+        private func send(event: [String: Any], browserEvent: String) {
             guard
                 JSONSerialization.isValidJSONObject(event),
                 let data = try? JSONSerialization.data(withJSONObject: event),
@@ -155,7 +197,7 @@ struct JarvisWebView: UIViewRepresentable {
                 return
             }
 
-            let script = "window.dispatchEvent(new CustomEvent('jarvis-native-voice',{detail:\(payload)}));"
+            let script = "window.dispatchEvent(new CustomEvent('\(browserEvent)',{detail:\(payload)}));"
             webView?.evaluateJavaScript(script)
         }
     }

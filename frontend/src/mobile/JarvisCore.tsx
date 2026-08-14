@@ -1,5 +1,5 @@
 /**
- * The Jarvis core — the first thing a client sees.
+ * The Jarvis command surface, embedded beside the orbital core on Home.
  *
  * A live HUD that reacts to the voice in the room: concentric rings driven by
  * the microphone's frequency spectrum, a core that pulses with loudness, and
@@ -12,17 +12,33 @@
  * re-render the whole shell on every frame.
  */
 
-import { Check, LayoutGrid, Mic, MicOff, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, Mic, MicOff, Send, X } from 'lucide-react';
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ask,
   cancelAction,
   confirmAction,
+  fetchIntegrations,
   listPendingActions,
   type ConfirmationMethod,
+  type DialogueMessage,
   type JarvisActionProposal,
 } from './api';
-import type { Today } from './types';
+import {
+  buildStrongAuthProof,
+  executeNativeCalendarProposal,
+  proposalRequiresStrongAuth,
+  requestNativeCalendarContext,
+} from './nativeIntegrations';
+import { DialogueSessionController } from './dialogueSession';
+import type { IntegrationConnection, ShellAppId, Today } from './types';
 import { useVoice, type VoiceState, type VoiceStatus } from './useVoice';
 
 /** Palette per status. The HUD's colour *is* its state readout. */
@@ -36,6 +52,26 @@ const TONES: Record<VoiceStatus, { core: string; ring: string; label: string }> 
 
 const TICKS = 72;
 const CORE_TEXTURE_SIZE = 768;
+
+const CONTEXT_LABELS: Record<ShellAppId, string> = {
+  finance: 'Finanças',
+  fitness: 'Treino',
+  routine: 'Rotina',
+  family: 'Família',
+  work: 'Trabalho',
+  health: 'Saúde',
+  connections: 'Conexões',
+};
+
+const CONTEXT_HINTS: Record<ShellAppId, string> = {
+  finance: '“Quanto gastei este mês?” ou “O que vence hoje?”',
+  fitness: '“Monte meu treino desta semana” ou “Como está minha evolução?”',
+  routine: '“Organize meu dia” ou “Crie uma rotina para a manhã”',
+  family: '“O que a família tem hoje?” ou “Lembre o aniversário da Ana”',
+  work: '“Priorize minhas tarefas” ou “Prepare meu briefing de amanhã”',
+  health: '“Registre 350 ml de água” ou “Organize meus exames”',
+  connections: '“Conecte meu calendário” ou “Quais integrações estão ativas?”',
+};
 
 export function corePixelAlpha(
   red: number,
@@ -117,6 +153,41 @@ export function voiceProposalIndex(text: string, count: number): number | null {
   return null;
 }
 
+export async function askWithNativeCalendarContext(
+  question: string,
+  askQuestion: typeof ask = ask,
+  readContext: typeof requestNativeCalendarContext = requestNativeCalendarContext,
+  connectionIsActive: () => Promise<boolean> = nativeCalendarConnectionIsActive,
+) {
+  let deviceContext: Awaited<ReturnType<typeof requestNativeCalendarContext>> | undefined;
+  try {
+    if (await connectionIsActive()) {
+      deviceContext = await readContext();
+    }
+  } catch {
+    // Connection lookup and the device bridge both fail closed. Asking Jarvis
+    // remains available, but EventKit is never read without a live server grant.
+  }
+  return askQuestion(question, deviceContext);
+}
+
+export async function nativeCalendarConnectionIsActive(): Promise<boolean> {
+  const overview = await fetchIntegrations();
+  const calendar = overview.providers.find(
+    (provider) => provider.id === 'apple_calendar',
+  );
+  return calendarConnectionAllowsContext(calendar?.connection ?? null);
+}
+
+export function calendarConnectionAllowsContext(
+  connection: IntegrationConnection | null,
+): boolean {
+  return (
+    connection?.status === 'connected' &&
+    connection.granted_scopes.includes('events.read')
+  );
+}
+
 function confirmationFailureMessage(proposal: JarvisActionProposal): string {
   const detail = proposal.result?.error ?? proposal.result?.detail;
   return typeof detail === 'string' && detail.trim()
@@ -126,17 +197,30 @@ function confirmationFailureMessage(proposal: JarvisActionProposal): string {
 
 export function JarvisCore({
   today,
-  onOpenSpringboard,
+  userId,
+  contextApp = null,
+  variant = 'standalone',
+  onClose,
   onRefresh,
 }: {
   today: Today | null;
-  onOpenSpringboard: () => void;
+  userId: string;
+  contextApp?: ShellAppId | null;
+  variant?: 'standalone' | 'embedded';
+  onClose: () => void;
   onRefresh: () => void;
 }) {
+  const embedded = variant === 'embedded';
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const gestureStartYRef = useRef<number | null>(null);
-  const gestureOpenedRef = useRef(false);
+  const dialogue = useMemo(
+    () => new DialogueSessionController(userId),
+    [userId],
+  );
   const [answer, setAnswer] = useState('');
+  const [history, setHistory] = useState<DialogueMessage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [dialogueStatus, setDialogueStatus] = useState('Pronto para conversar');
   const [proposals, setProposals] = useState<JarvisActionProposal[]>([]);
   const [resolving, setResolving] = useState('');
   // The draw loop must see the current status without being torn down and
@@ -159,6 +243,35 @@ export function JarvisCore({
     proposalsRef.current = proposals;
   }, [proposals]);
 
+  useEffect(() => {
+    let active = true;
+    if (contextApp) {
+      dialogue.beginSpecialistContext(contextApp);
+      setAnswer('');
+      setHistory([]);
+      setDialogueStatus(`Especialista de ${CONTEXT_LABELS[contextApp]} ativo`);
+      return () => {
+        active = false;
+      };
+    }
+
+    setDialogueStatus('Sincronizando contexto');
+    void dialogue.restore().then((snapshot) => {
+      if (!active) return;
+      const previousAnswer = [...snapshot.history]
+        .reverse()
+        .find((message) => message.role === 'assistant')?.content;
+      if (previousAnswer) setAnswer(previousAnswer);
+      setHistory(snapshot.history);
+      setDialogueStatus(
+        snapshot.conversationId ? 'Contexto restaurado' : 'Pronto para conversar',
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [contextApp, dialogue]);
+
   const resolveProposal = useCallback(
     async (
       proposal: JarvisActionProposal,
@@ -170,7 +283,21 @@ export function JarvisCore({
       setResolving(proposal.id);
       try {
         if (approved) {
-          const result = await confirmAction(proposal.id, confirmationMethod);
+          const result =
+            proposal.tool_name === 'calendar_create'
+              ? await executeNativeCalendarProposal(proposal, confirmationMethod)
+              : await confirmAction(
+                  proposal.id,
+                  confirmationMethod,
+                  proposalRequiresStrongAuth(proposal)
+                    ? await buildStrongAuthProof(
+                        'finance',
+                        proposal.id,
+                        confirmationMethod,
+                        true,
+                      )
+                    : undefined,
+                );
           if (!confirmedProposalSucceeded(result.proposal)) {
             throw new Error(confirmationFailureMessage(result.proposal));
           }
@@ -239,15 +366,26 @@ export function JarvisCore({
       }
 
       busyRef.current = true;
+      setSubmitting(true);
       controls.setStatus('thinking');
       statusRef.current = 'thinking';
+      setDialogueStatus('Processando sua solicitação');
+      setHistory((current) => [
+        ...current,
+        { role: 'user' as const, content: question },
+      ].slice(-20));
       try {
-        const result = await ask(question);
+        const result = await askWithNativeCalendarContext(
+          question,
+          (message, deviceContext) => dialogue.submit(message, deviceContext),
+        );
         setAnswer(result.answer);
+        setHistory(result.history ?? dialogue.current().history);
         const nextProposals = result.proposals ?? [];
         proposalsRef.current = nextProposals;
         setProposals(nextProposals);
         controls.speak(result.answer);
+        setDialogueStatus('Resposta pronta');
         // A spoken exchange may have changed the data behind the badges.
         onRefresh();
       } catch (exc) {
@@ -255,15 +393,17 @@ export function JarvisCore({
           exc instanceof Error ? exc.message : 'Não consegui responder agora.';
         setAnswer(message);
         controls.speak(message);
+        setDialogueStatus('Falha ao responder');
       } finally {
         busyRef.current = false;
+        setSubmitting(false);
         const queued = queuedQuestionsRef.current.shift();
         if (queued) {
           queueMicrotask(() => void handleQuestionRef.current(queued));
         }
       }
     },
-    [onRefresh, resolveProposal],
+    [dialogue, onRefresh, resolveProposal],
   );
   handleQuestionRef.current = handleQuestion;
 
@@ -537,73 +677,112 @@ export function JarvisCore({
   const listening = voice.status === 'listening';
   const spoken = voice.interim || voice.transcript;
 
+  const submitDraft = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const question = draft.trim();
+    if (!question || submitting) return;
+    setDraft('');
+    void handleQuestion(question);
+  };
+
   return (
-    <div className="oj-jarvis">
-      <header className="oj-hud-top">
-        <div className="oj-hud-brand">
-          <strong>JARVIS LIFE</strong>
-          <span>NEURAL CORE / VOICE OS</span>
+    <div
+      className={`oj-jarvis${embedded ? ' oj-jarvis--embedded' : ''}`}
+      role={embedded ? undefined : 'dialog'}
+      aria-modal={embedded ? undefined : true}
+      aria-label={embedded ? 'Comandos do Jarvis' : 'Painel do Jarvis'}
+    >
+      {embedded ? (
+        <div className="oj-embedded-command-head">
+          <div className="oj-embedded-command-state" aria-live="polite">
+            <span className="oj-hud-dot" style={{ background: tone.core }} />
+            <strong>JARVIS</strong>
+            <span>{tone.label}</span>
+          </div>
+          <button
+            type="button"
+            className="oj-hud-btn"
+            onClick={onClose}
+            aria-label="Recolher comandos do Jarvis"
+          >
+            <X size={18} />
+          </button>
         </div>
-        <div className="oj-hud-readout">
-          <span className="oj-hud-dot" style={{ background: tone.core }} />
-          {tone.label}
-        </div>
-        <button
-          type="button"
-          className="oj-hud-btn"
-          onClick={onOpenSpringboard}
-          aria-label="Abrir aplicativos"
-        >
-          <LayoutGrid size={20} />
-        </button>
-      </header>
+      ) : (
+        <header className="oj-hud-top">
+          <div className="oj-hud-brand">
+            <strong>JARVIS LIFE</strong>
+            <span>NEURAL CORE / VOICE OS</span>
+          </div>
+          <div className="oj-hud-readout" aria-live="polite">
+            <span className="oj-hud-dot" style={{ background: tone.core }} />
+            {tone.label}
+          </div>
+          <button
+            type="button"
+            className="oj-hud-btn"
+            onClick={onClose}
+            aria-label="Fechar painel do Jarvis"
+            autoFocus
+          >
+            <X size={20} />
+          </button>
+        </header>
+      )}
 
-      <div className="oj-hud-stage">
-        <div className="oj-hud-telemetry" aria-hidden="true">
-          <span>CORE SYNC<br /><strong>100%</strong></span>
-          <span>AGENTS<br /><strong>05 ONLINE</strong></span>
-          <span>VOICE LINK<br /><strong>{tone.label}</strong></span>
-        </div>
-        <canvas
-          ref={canvasRef}
-          className="oj-hud-canvas"
-          role="img"
-          aria-label="Núcleo neural vivo do Jarvis"
-        />
-        <button
-          type="button"
-          className="oj-hud-hit"
-          onPointerDown={(event) => {
-            gestureStartYRef.current = event.clientY;
-            gestureOpenedRef.current = false;
-          }}
-          onPointerUp={(event) => {
-            const startY = gestureStartYRef.current;
-            gestureStartYRef.current = null;
-            if (startY !== null && startY - event.clientY > 52) {
-              gestureOpenedRef.current = true;
-              onOpenSpringboard();
-            }
-          }}
-          onClick={() => {
-            if (gestureOpenedRef.current) {
-              gestureOpenedRef.current = false;
-              return;
-            }
-            if (listening) voice.stop();
-            else voice.start();
-          }}
-          aria-label={listening ? 'Parar de ouvir' : 'Começar a ouvir'}
-        />
-        <span className="oj-hud-swipe" aria-hidden="true">
-          deslize para cima · aplicativos
-        </span>
-      </div>
+      {contextApp && (
+        <div className="oj-hud-context">Contexto: {CONTEXT_LABELS[contextApp]}</div>
+      )}
 
-      <div className="oj-hud-text">
+      {!embedded && (
+        <div className="oj-hud-stage">
+          <div className="oj-hud-telemetry" aria-hidden="true">
+            <span>CORE SYNC<br /><strong>100%</strong></span>
+            <span>AGENTS<br /><strong>06 ONLINE</strong></span>
+            <span>VOICE LINK<br /><strong>{tone.label}</strong></span>
+          </div>
+          <canvas
+            ref={canvasRef}
+            className="oj-hud-canvas"
+            role="img"
+            aria-label="Núcleo neural vivo do Jarvis"
+          />
+          <button
+            type="button"
+            className="oj-hud-hit"
+            onClick={() => (listening ? voice.stop() : voice.start())}
+            aria-label={listening ? 'Parar de ouvir' : 'Começar a ouvir'}
+          />
+          <span className="oj-hud-swipe" aria-hidden="true">
+            toque no núcleo · voz
+          </span>
+        </div>
+      )}
+
+      <div
+        className="oj-hud-text"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+        aria-busy={submitting}
+      >
+        <span className="oj-visually-hidden">{dialogueStatus}</span>
+        <div className="oj-hud-history" aria-label="Histórico da conversa">
+          {history.slice(-6).map((message, index) => (
+            <p
+              key={`${message.role}-${index}-${message.content.slice(0, 24)}`}
+              data-role={message.role}
+            >
+              <span>{message.role === 'user' ? 'Você' : 'Jarvis'}</span>
+              {message.content}
+            </p>
+          ))}
+        </div>
         {voice.error && <p className="oj-hud-error">{voice.error}</p>}
         {spoken && <p className="oj-hud-said">“{spoken}”</p>}
-        {answer && <p className="oj-hud-answer">{answer}</p>}
+        {answer && history[history.length - 1]?.content !== answer && (
+          <p className="oj-hud-answer">{answer}</p>
+        )}
         {proposals.map((proposal) => (
           <section className="oj-action-card" key={proposal.id} aria-live="polite">
             <span className="oj-action-eyebrow">Confirmação necessária</span>
@@ -632,11 +811,38 @@ export function JarvisCore({
         {!spoken && !answer && !voice.error && (
           <p className="oj-hud-hint">
             {voice.supported
-              ? 'Fale comigo. “Quanto gastei esse mês?”, “O que vence hoje?”'
-              : 'Este navegador não reconhece fala — use os apps abaixo.'}
+              ? `Fale comigo. ${
+                  contextApp
+                    ? CONTEXT_HINTS[contextApp]
+                    : '“Quanto gastei este mês?” ou “O que vence hoje?”'
+                }`
+              : 'Use o campo abaixo para conversar com o Jarvis.'}
           </p>
         )}
       </div>
+
+      <form
+        className="oj-hud-composer"
+        aria-label="Conversar por texto com o Jarvis"
+        onSubmit={submitDraft}
+      >
+        <input
+          type="text"
+          name="jarvis-message"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="Digite um comando para o Jarvis"
+          aria-label="Mensagem para o Jarvis"
+          autoComplete="off"
+        />
+        <button
+          type="submit"
+          disabled={submitting || !draft.trim()}
+          aria-label="Enviar mensagem"
+        >
+          <Send size={18} />
+        </button>
+      </form>
 
       <footer className="oj-hud-bottom">
         <div className="oj-hud-specialists" aria-label="Especialistas disponíveis">
@@ -645,6 +851,7 @@ export function JarvisCore({
           <span>ROUTINE</span>
           <span>WORK</span>
           <span>FAMILY</span>
+          <span>HEALTH</span>
         </div>
         {today && (
           <div className="oj-hud-chips">

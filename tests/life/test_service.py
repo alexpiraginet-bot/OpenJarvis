@@ -65,6 +65,64 @@ def test_add_transaction_credits_income(life, user):
     assert life.store.get("accounts", user.id, account)["balance_cents"] == 500000
 
 
+def test_add_transaction_applies_account_delta_atomically(life, user, monkeypatch):
+    account = life.store.insert(
+        "accounts", user.id, {"name": "Nubank", "balance_cents": 100000}
+    )
+    statements = []
+    execute = life.connection.execute
+
+    def recording_execute(sql, params=()):
+        statements.append((" ".join(sql.split()), tuple(params)))
+        return execute(sql, params)
+
+    monkeypatch.setattr(life.connection, "execute", recording_execute)
+
+    life.service.add_transaction(
+        user.id,
+        amount_cents=4590,
+        category="mercado",
+        account_id=account,
+    )
+
+    deltas = [
+        params
+        for sql, params in statements
+        if sql.startswith(
+            "UPDATE accounts SET balance_cents = balance_cents + ? "
+            "WHERE id = ? AND user_id = ?"
+        )
+    ]
+    assert deltas == [(-4590, account, user.id)]
+
+
+def test_add_transaction_locks_account_row_on_postgres(life, user, monkeypatch):
+    account = life.store.insert(
+        "accounts", user.id, {"name": "Nubank", "balance_cents": 100000}
+    )
+    statements = []
+    execute = life.connection.execute
+    life.connection._backend = "postgres"
+
+    def postgres_sql_over_sqlite(sql, params=()):
+        statements.append(" ".join(sql.split()))
+        life.connection._backend = "sqlite"
+        try:
+            return execute(sql.replace(" FOR UPDATE", ""), params)
+        finally:
+            life.connection._backend = "postgres"
+
+    monkeypatch.setattr(life.connection, "execute", postgres_sql_over_sqlite)
+
+    life.service.add_transaction(user.id, amount_cents=4590, account_id=account)
+
+    assert any(
+        statement.startswith("SELECT id FROM accounts")
+        and statement.endswith("FOR UPDATE")
+        for statement in statements
+    )
+
+
 def test_add_transaction_without_account_still_records(life, user):
     record = life.service.add_transaction(user.id, amount_cents=1000)
     assert record["amount_cents"] == 1000
@@ -81,13 +139,19 @@ def test_add_transaction_rejects_unknown_kind(life, user):
         life.service.add_transaction(user.id, amount_cents=100, kind="transferencia")
 
 
-def test_add_transaction_ignores_foreign_account(life, user, other_user):
-    """An account id from another tenant must not move that tenant's balance."""
+def test_add_transaction_rejects_foreign_account_without_writing(
+    life, user, other_user
+):
+    """A cross-tenant account cannot leave an orphaned ledger entry behind."""
     foreign = life.store.insert(
         "accounts", other_user.id, {"name": "Da Bruna", "balance_cents": 100000}
     )
-    life.service.add_transaction(user.id, amount_cents=5000, account_id=foreign)
+
+    with pytest.raises(LifeServiceError, match="Account not found"):
+        life.service.add_transaction(user.id, amount_cents=5000, account_id=foreign)
+
     assert life.store.get("accounts", other_user.id, foreign)["balance_cents"] == 100000
+    assert life.store.count("transactions", user.id) == 0
 
 
 def test_pay_bill_marks_paid_books_expense_and_recurs(life, user):
@@ -172,6 +236,34 @@ def test_pay_bill_twice_is_rejected(life, user):
         life.service.pay_bill(user.id, bill)
 
 
+def test_pay_bill_locks_target_row_on_postgres(life, user, monkeypatch):
+    bill = life.store.insert(
+        "bills",
+        user.id,
+        {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-01"},
+    )
+    statements = []
+    execute = life.connection.execute
+    life.connection._backend = "postgres"
+
+    def postgres_sql_over_sqlite(sql, params=()):
+        statements.append(" ".join(sql.split()))
+        life.connection._backend = "sqlite"
+        try:
+            return execute(sql.replace(" FOR UPDATE", ""), params)
+        finally:
+            life.connection._backend = "postgres"
+
+    monkeypatch.setattr(life.connection, "execute", postgres_sql_over_sqlite)
+
+    life.service.pay_bill(user.id, bill)
+
+    assert any(
+        statement.startswith("SELECT * FROM bills") and statement.endswith("FOR UPDATE")
+        for statement in statements
+    )
+
+
 def test_concurrent_bill_payment_books_one_expense(life, user):
     account = life.store.insert(
         "accounts", user.id, {"name": "Nubank", "balance_cents": 50000}
@@ -224,6 +316,22 @@ def test_pay_bill_rolls_back_every_change_when_recurrence_creation_fails(
 
     assert life.store.get("bills", user.id, bill)["status"] == "pending"
     assert life.store.get("accounts", user.id, account)["balance_cents"] == 50000
+    assert life.store.count("transactions", user.id) == 0
+
+
+def test_pay_bill_rejects_foreign_account_and_rolls_back(life, user, other_user):
+    foreign = life.store.insert(
+        "accounts", other_user.id, {"name": "Da Bruna", "balance_cents": 100000}
+    )
+    bill = life.store.insert(
+        "bills", user.id, {"name": "Net", "amount_cents": 9900, "due_on": "2026-08-01"}
+    )
+
+    with pytest.raises(LifeServiceError, match="Account not found"):
+        life.service.pay_bill(user.id, bill, account_id=foreign)
+
+    assert life.store.get("bills", user.id, bill)["status"] == "pending"
+    assert life.store.get("accounts", other_user.id, foreign)["balance_cents"] == 100000
     assert life.store.count("transactions", user.id) == 0
 
 
@@ -542,3 +650,118 @@ def test_work_summary_splits_overdue_and_due_today(life, user):
     assert [t["title"] for t in summary["overdue"]] == ["Atrasada"]
     assert [t["title"] for t in summary["due_today"]] == ["Hoje"]
     assert summary["open_count"] == 3
+
+
+# -- Health ------------------------------------------------------------------
+
+
+def test_health_summary_preserves_confirmed_facts_and_today_totals(life, user):
+    life.store.insert(
+        "health_profiles",
+        user.id,
+        {"height_cm": 178, "goals": "Dormir melhor", "consent_health_memory": 1},
+    )
+    life.store.insert(
+        "health_conditions", user.id, {"name": "Asma", "status": "active"}
+    )
+    life.store.insert(
+        "health_conditions", user.id, {"name": "Antiga", "status": "resolved"}
+    )
+    life.store.insert(
+        "medications", user.id, {"name": "Medicamento informado", "status": "active"}
+    )
+    life.store.insert("allergies", user.id, {"substance": "Látex"})
+    life.store.insert(
+        "hydration_logs",
+        user.id,
+        {"amount_ml": 500, "occurred_at": "2026-08-10T08:00:00-03:00"},
+    )
+    life.store.insert(
+        "hydration_logs",
+        user.id,
+        {"amount_ml": 300, "occurred_at": "2026-08-09T20:00:00-03:00"},
+    )
+    life.store.insert(
+        "nutrition_logs",
+        user.id,
+        {
+            "meal_type": "breakfast",
+            "description": "Pão e fruta",
+            "occurred_at": "2026-08-10T07:00:00-03:00",
+        },
+    )
+    life.store.insert(
+        "health_observations",
+        user.id,
+        {
+            "kind": "peso",
+            "value": 80.1,
+            "unit": "kg",
+            "observed_at": "2026-08-10T07:30:00-03:00",
+        },
+    )
+    life.store.insert(
+        "health_observations",
+        user.id,
+        {
+            "kind": "peso",
+            "value": 81,
+            "unit": "kg",
+            "observed_at": "2026-08-01T07:30:00-03:00",
+        },
+    )
+
+    summary = life.service.health_summary(
+        user.id, anchor=TODAY, timezone_name=user.timezone
+    )
+
+    assert summary["profile"]["goals"] == "Dormir melhor"
+    assert [item["name"] for item in summary["active_conditions"]] == ["Asma"]
+    assert len(summary["active_medications"]) == 1
+    assert [item["substance"] for item in summary["allergies"]] == ["Látex"]
+    assert summary["hydration_today_ml"] == 500
+    assert summary["nutrition_today_count"] == 1
+    assert summary["latest_observations"][0]["value"] == 80.1
+
+
+def test_health_summary_never_reads_another_tenant(life, user, other_user):
+    life.store.insert("medications", user.id, {"name": "Privado", "status": "active"})
+    life.store.insert(
+        "hydration_logs",
+        user.id,
+        {"amount_ml": 900, "occurred_at": "2026-08-10T08:00:00-03:00"},
+    )
+
+    summary = life.service.health_summary(other_user.id, anchor=TODAY)
+
+    assert summary["active_medications"] == []
+    assert summary["hydration_today_ml"] == 0
+
+
+def test_health_summary_uses_the_users_local_day_after_utc_rollover(life, user):
+    life.store.insert(
+        "hydration_logs",
+        user.id,
+        {"amount_ml": 250, "occurred_at": "2026-08-11T02:30:00+00:00"},
+    )
+    life.store.insert(
+        "hydration_logs",
+        user.id,
+        {"amount_ml": 400, "occurred_at": "2026-08-10T02:30:00+00:00"},
+    )
+    life.store.insert(
+        "nutrition_logs",
+        user.id,
+        {
+            "meal_type": "dinner",
+            "description": "Refeição confirmada",
+            "occurred_at": "2026-08-11T02:45:00+00:00",
+        },
+    )
+
+    summary = life.service.health_summary(
+        user.id, anchor=TODAY, timezone_name="America/Sao_Paulo"
+    )
+
+    assert summary["hydration_today_ml"] == 250
+    assert summary["nutrition_today_count"] == 1

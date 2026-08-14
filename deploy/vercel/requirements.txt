@@ -15,6 +15,10 @@ python-multipart>=0.0.9
 # PostgreSQL. The binary wheel avoids needing libpq on the build image.
 psycopg[binary]>=3.1
 
+# Apple App Attest validation for privileged iPhone-only integrations.
+cbor2>=5.6
+cryptography>=43
+
 # Pulled in transitively by `openjarvis/__init__` → sdk → engine/telemetry.
 # Importing any openjarvis submodule executes that package __init__, so these
 # are unavoidable without restructuring the framework's entrypoint.

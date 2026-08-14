@@ -75,7 +75,7 @@ export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
 
         <div className="oj-login-capabilities" aria-label="Capacidades do sistema">
           <span><Waves size={12} /> voz neural</span>
-          <span>5 especialistas IA</span>
+          <span>6 especialistas IA</span>
           <span><ShieldCheck size={12} /> dados protegidos</span>
         </div>
 
