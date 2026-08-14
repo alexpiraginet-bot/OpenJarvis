@@ -163,6 +163,9 @@ describe('presentProvider', () => {
     expect(view.statusLabel).toBe('No iPhone');
     expect(view.cta).toBe('device');
     expect(view.ctaLabel).toBe('Autorizar calendário');
+    expect(view.detail).toBe(
+      'Disponível no app iOS; ainda não conectado neste aparelho.',
+    );
   });
 
   it('Apple Health continua indisponivel enquanto nao existe bridge HealthKit', () => {

@@ -23,6 +23,32 @@ final class JarvisConfigurationTests: XCTestCase {
         XCTAssertNil(JarvisConfiguration.validatedAppURL("not-a-url"))
     }
 
+    func testTrustedWebOriginAcceptsWebKitDefaultHTTPSPort() {
+        let appURL = URL(string: "https://jarvis-life.vercel.app/vida")!
+
+        XCTAssertTrue(
+            JarvisTrustedOrigin.matches(
+                scheme: "https",
+                host: "jarvis-life.vercel.app",
+                port: 0,
+                applicationURL: appURL
+            )
+        )
+    }
+
+    func testTrustedWebOriginRejectsAnotherExplicitPort() {
+        let appURL = URL(string: "https://jarvis-life.vercel.app/vida")!
+
+        XCTAssertFalse(
+            JarvisTrustedOrigin.matches(
+                scheme: "https",
+                host: "jarvis-life.vercel.app",
+                port: 8443,
+                applicationURL: appURL
+            )
+        )
+    }
+
     func testNativeVoiceLevelNormalization() {
         XCTAssertEqual(NativeSpeechController.normalizedLevel(forRMS: 0), 0)
         XCTAssertEqual(NativeSpeechController.normalizedLevel(forRMS: .nan), 0)

@@ -2,6 +2,40 @@ import SwiftUI
 import UIKit
 import WebKit
 
+enum JarvisTrustedOrigin {
+    static func matches(
+        scheme: String,
+        host: String,
+        port: Int,
+        applicationURL: URL
+    ) -> Bool {
+        let candidateScheme = scheme.lowercased()
+        guard
+            let expectedScheme = applicationURL.scheme?.lowercased(),
+            let expectedHost = applicationURL.host?.lowercased(),
+            let candidatePort = normalizedPort(port, scheme: candidateScheme),
+            let expectedPort = normalizedPort(
+                applicationURL.port ?? 0,
+                scheme: expectedScheme
+            )
+        else {
+            return false
+        }
+        return candidateScheme == expectedScheme
+            && host.lowercased() == expectedHost
+            && candidatePort == expectedPort
+    }
+
+    private static func normalizedPort(_ port: Int, scheme: String) -> Int? {
+        if port > 0 { return port }
+        switch scheme {
+        case "https": return 443
+        case "http": return 80
+        default: return nil
+        }
+    }
+}
+
 struct JarvisWebView: UIViewRepresentable {
     let appURL: URL
     let reloadID: Int
@@ -119,16 +153,12 @@ struct JarvisWebView: UIViewRepresentable {
         }
 
         private func isTrustedOrigin(_ origin: WKSecurityOrigin) -> Bool {
-            guard
-                let scheme = appURL.scheme?.lowercased(),
-                let host = appURL.host?.lowercased(),
-                origin.protocol.lowercased() == scheme,
-                origin.host.lowercased() == host
-            else {
-                return false
-            }
-            let expectedPort = appURL.port ?? (scheme == "https" ? 443 : 80)
-            return origin.port == expectedPort
+            JarvisTrustedOrigin.matches(
+                scheme: origin.protocol,
+                host: origin.host,
+                port: origin.port,
+                applicationURL: appURL
+            )
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

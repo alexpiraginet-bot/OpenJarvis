@@ -198,7 +198,7 @@ export function presentProvider(
           tone: 'accent',
           cta: 'device',
           ctaLabel: 'Autorizar calendário',
-          detail: 'Permissão completa concedida pelo sistema do iPhone.',
+          detail: 'Disponível no app iOS; ainda não conectado neste aparelho.',
           active: false,
         };
       }

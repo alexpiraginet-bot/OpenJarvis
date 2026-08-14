@@ -52,7 +52,7 @@ app_target.build_configurations.each do |configuration|
   settings["CLANG_ENABLE_MODULES"] = "YES"
   settings["CODE_SIGN_STYLE"] = "Automatic"
   settings["CODE_SIGN_ENTITLEMENTS"] = "JarvisLife/JarvisLife.entitlements"
-  settings["CURRENT_PROJECT_VERSION"] = "7"
+  settings["CURRENT_PROJECT_VERSION"] = "8"
   settings["DEVELOPMENT_TEAM"] = "NP9X453K55"
   settings["ENABLE_PREVIEWS"] = "YES"
   settings["ENABLE_USER_SCRIPT_SANDBOXING"] = "YES"
