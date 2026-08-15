@@ -97,6 +97,7 @@ export function PeopleTab({ onChanged }: { onChanged: () => void }) {
   }
 
   if (members.loading) return <SkeletonScreen />;
+  if (members.error) return <div className="oj-error">{members.error}</div>;
   const records = members.data?.records ?? [];
 
   return (

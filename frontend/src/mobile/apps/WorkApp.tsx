@@ -73,6 +73,7 @@ export function TasksTab({ onChanged }: { onChanged: () => void }) {
   }
 
   if (tasks.loading) return <SkeletonScreen />;
+  if (summary.error || tasks.error) return <div className="oj-error">{summary.error || tasks.error}</div>;
 
   const records = tasks.data?.records ?? [];
   const open = records.filter((task) => task.status !== 'done');
@@ -209,6 +210,7 @@ export function ProjectsTab() {
   }
 
   if (projects.loading) return <SkeletonScreen />;
+  if (projects.error) return <div className="oj-error">{projects.error}</div>;
   const records = projects.data?.records ?? [];
 
   return (

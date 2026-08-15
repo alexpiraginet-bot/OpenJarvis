@@ -234,6 +234,10 @@ export function FinancialDocumentsTab({
       <Section title="Documentos recentes">
         {documents.loading ? (
           <SkeletonRows count={2} />
+        ) : documents.error ? (
+          // Sem isto uma falha de rede cai no ramo de lista vazia e diz ao
+          // cliente que ele nunca enviou documento nenhum.
+          <div className="oj-error">{documents.error}</div>
         ) : (documents.data?.documents.length ?? 0) === 0 ? (
           <Empty>Nenhum documento analisado.</Empty>
         ) : (
@@ -415,6 +419,7 @@ export function BillsTab({
   // e renderizar antes de o loader resolver deixa uma janela em que "Pagar"
   // funciona pela metade.
   if (bills.loading || accounts.loading) return <SkeletonScreen />;
+  if (bills.error || accounts.error) return <div className="oj-error">{bills.error || accounts.error}</div>;
 
   return (
     <>
@@ -562,6 +567,7 @@ export function TransactionsTab({
   }
 
   if (transactions.loading || accounts.loading) return <SkeletonScreen />;
+  if (transactions.error || accounts.error) return <div className="oj-error">{transactions.error || accounts.error}</div>;
   const records = transactions.data?.records ?? [];
 
   return (
@@ -629,6 +635,7 @@ export function GoalsTab({ currency }: { currency: string }) {
   const accounts = useLoader(listAccounts);
 
   if (goals.loading) return <SkeletonScreen />;
+  if (goals.error || accounts.error) return <div className="oj-error">{goals.error || accounts.error}</div>;
   const records = goals.data?.records ?? [];
   const accountRecords: Account[] = accounts.data?.records ?? [];
 

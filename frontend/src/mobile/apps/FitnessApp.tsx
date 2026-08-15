@@ -711,6 +711,7 @@ export function WorkoutsTab({ onChanged }: { onChanged: () => void }) {
   }
 
   if (workouts.loading) return <SkeletonScreen />;
+  if (workouts.error) return <div className="oj-error">{workouts.error}</div>;
   const records = workouts.data?.records ?? [];
   const upcoming = records.filter((w) => !w.completed_at);
   const done = records.filter((w) => w.completed_at);
@@ -824,6 +825,7 @@ export function MeasurementsTab() {
   }
 
   if (measurements.loading) return <SkeletonScreen />;
+  if (measurements.error) return <div className="oj-error">{measurements.error}</div>;
   const records = measurements.data?.records ?? [];
 
   return (

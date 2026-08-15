@@ -117,6 +117,7 @@ export function ManageHabits({ onChanged }: { onChanged: () => void }) {
   }
 
   if (routine.loading) return <SkeletonScreen />;
+  if (routine.error) return <div className="oj-error">{routine.error}</div>;
   const habits = routine.data?.habits ?? [];
   const best = [...habits].sort((a, b) => b.streak - a.streak)[0];
 
