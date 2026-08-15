@@ -184,6 +184,50 @@ def test_record_tool_can_operate_the_coach_from_voice(life, user, tools):
     assert json.loads(feedback.content)["record"]["feedback"]["completion_pct"] == 100
 
 
+def test_record_tool_honours_the_goal_name_its_own_schema_documents(tools):
+    """``life_record``'s schema advertises ``goal`` for a training profile.
+
+    ``save_profile`` reads ``primary_goal`` and falls back to
+    ``general_fitness`` when it is absent, so a model that followed the
+    documented field name had the client's actual objective dropped in
+    silence — "minha meta é a São Silvestre" stored as "condicionamento
+    geral", with no exception and nothing in the reply to notice it by.
+    """
+    _, record, _ = tools
+    result = record.execute(
+        kind="training_profile",
+        fields={
+            "primary_sport": "running",
+            "goal": "10k",
+            "level": "beginner",
+            "weekly_days": 3,
+            "available_weekdays": [1, 3, 5],
+        },
+    )
+
+    assert result.success
+    assert json.loads(result.content)["record"]["primary_goal"] == "10k"
+
+
+def test_record_tool_prefers_primary_goal_when_both_names_arrive(tools):
+    """The schema's own name wins, so the alias can never shadow it."""
+    _, record, _ = tools
+    result = record.execute(
+        kind="training_profile",
+        fields={
+            "primary_sport": "running",
+            "primary_goal": "half_marathon",
+            "goal": "10k",
+            "level": "beginner",
+            "weekly_days": 3,
+            "available_weekdays": [1, 3, 5],
+        },
+    )
+
+    assert result.success
+    assert json.loads(result.content)["record"]["primary_goal"] == "half_marathon"
+
+
 def test_overview_rejects_unknown_section(tools):
     result = tools[0].execute(section="astrologia")
     assert result.success is False

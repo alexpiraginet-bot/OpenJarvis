@@ -81,6 +81,18 @@ _DATETIME_DEFAULTS = {
     "nutrition": "occurred_at",
 }
 
+# Field names a model plausibly reaches for, mapped to the column that stores
+# them. Three unrelated things in this domain are called a "goal" — the savings
+# goal (``goals``), the plan's objective (``training_plans.goal``) and the
+# athlete's own (``training_profiles.primary_goal``) — so a model naming the
+# short one is following the domain, not misreading the schema. Aliasing beats
+# rejecting here: ``save_profile`` defaults an absent ``primary_goal`` to
+# ``general_fitness``, so an unmapped alias is not an error the client ever
+# sees, it is their stated objective quietly replaced by the wrong one.
+_RECORD_FIELD_ALIASES = {
+    "training_profile": {"goal": "primary_goal"},
+}
+
 # Fields maintained by multi-step domain actions. Generic record creation must
 # not bypass ledger entries, completion stamps or other side effects.
 _ACTION_OWNED_RECORD_FIELDS = {
@@ -150,6 +162,13 @@ def normalize_life_record_fields(kind: str, fields: Any) -> Dict[str, Any]:
         raise ValueError("fields must be an object")
 
     normalized = dict(fields)
+    for alias, column in _RECORD_FIELD_ALIASES.get(kind, {}).items():
+        # The canonical name wins: an alias may fill a gap, never shadow a
+        # value the model already spelled correctly.
+        if alias in normalized and not normalized.get(column):
+            normalized[column] = normalized[alias]
+        normalized.pop(alias, None)
+
     protected = _ACTION_OWNED_RECORD_FIELDS.get(kind, frozenset())
     bypassed = sorted(protected.intersection(normalized))
     if bypassed:
@@ -335,7 +354,7 @@ class LifeRecordTool(_LifeTool):
                             "health_observation: kind, value, unit. condition and "
                             "medication: name. nutrition: meal_type, description. "
                             "training_profile: primary_sport, secondary_sports, "
-                            "goal, level, agenda and history. training_plan: "
+                            "primary_goal, level, agenda and history. training_plan: "
                             "start_on and weeks. training_checkin/training_feedback: "
                             "session_id plus readiness or completion metrics."
                         ),
