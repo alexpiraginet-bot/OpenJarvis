@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from openjarvis.life.db import configured_database_target
@@ -84,6 +84,26 @@ def create_life_app(
         allow_headers=["*"],
     )
 
+    # Registrada ANTES do router de propósito. Montar o router abre o banco e
+    # roda `ensure_schema`, e isso acontece em tempo de import — num serverless
+    # é o cold start. Se ficasse depois, um banco inacessível derrubaria o
+    # módulo inteiro e /health morreria junto, justamente quando ele é a única
+    # forma de descobrir o que houve.
+    app.state.startup_error = ""
+
+    @app.get("/health")
+    async def health() -> dict:
+        """Liveness probe. Open by design — it exposes nothing about a client."""
+        if app.state.startup_error:
+            # Sem a mensagem original: ela pode carregar host, usuário ou DSN,
+            # e esta rota é pública.
+            return {
+                "status": "degraded",
+                "service": "life",
+                "detail": app.state.startup_error,
+            }
+        return {"status": "ok", "service": "life"}
+
     resolved_whatsapp_channel = whatsapp_channel
     if resolved_whatsapp_channel is None:
         access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
@@ -100,24 +120,46 @@ def create_life_app(
         if channel_pepper is not None
         else os.environ.get("OPENJARVIS_LIFE_CHANNEL_PEPPER", "").encode("utf-8")
     )
-    router = create_life_router(
-        db_path or configured_database_target(),
-        channel_address_vault=channel_address_vault,
-        channel_pepper=resolved_channel_pepper,
-        whatsapp_channel=resolved_whatsapp_channel,
-        whatsapp_verify_token=(
-            whatsapp_verify_token
-            if whatsapp_verify_token is not None
-            else os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
-        ),
-        whatsapp_app_secret=(
-            whatsapp_app_secret
-            if whatsapp_app_secret is not None
-            else os.environ.get("WHATSAPP_APP_SECRET", "")
-        ),
-        whatsapp_news_provider=whatsapp_news_provider,
-        whatsapp_inbound_handler=whatsapp_inbound_handler,
-    )
+    try:
+        router = create_life_router(
+            db_path or configured_database_target(),
+            channel_address_vault=channel_address_vault,
+            channel_pepper=resolved_channel_pepper,
+            whatsapp_channel=resolved_whatsapp_channel,
+            whatsapp_verify_token=(
+                whatsapp_verify_token
+                if whatsapp_verify_token is not None
+                else os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+            ),
+            whatsapp_app_secret=(
+                whatsapp_app_secret
+                if whatsapp_app_secret is not None
+                else os.environ.get("WHATSAPP_APP_SECRET", "")
+            ),
+            whatsapp_news_provider=whatsapp_news_provider,
+            whatsapp_inbound_handler=whatsapp_inbound_handler,
+        )
+    except Exception as exc:  # noqa: BLE001 - /health tem que sobreviver
+        # Abrir o banco e criar o schema acontece aqui dentro. Deixar subir
+        # mata o módulo inteiro num serverless, e aí nem /health responde —
+        # some a única pista de que o problema é o banco e não o deploy.
+        logger.exception("Life router failed to start")
+        app.state.startup_error = type(exc).__name__
+        app.state.life_context = None
+
+        @app.api_route(
+            "/v1/life/{full_path:path}",
+            methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        )
+        async def life_unavailable(full_path: str) -> JSONResponse:
+            """503 explícito é melhor que 404: o recurso existe, o banco não."""
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Life API indisponível: falha ao abrir o banco."},
+            )
+
+        return app
+
     app.include_router(router)
     app.state.life_context = getattr(router, "life_context", None)
 
@@ -139,11 +181,6 @@ def create_life_app(
             or os.environ.get("OPENJARVIS_LIFE_MODEL", "gpt-5-mini").strip()
             or "gpt-5-mini"
         )
-
-    @app.get("/health")
-    async def health() -> dict:
-        """Liveness probe. Open by design — it exposes nothing about a client."""
-        return {"status": "ok", "service": "life"}
 
     if serve_static and _STATIC_DIR.is_dir():
         assets = _STATIC_DIR / "assets"

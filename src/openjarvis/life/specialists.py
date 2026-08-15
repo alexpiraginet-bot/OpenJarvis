@@ -357,11 +357,7 @@ def select_specialists(
     scored.sort()
     if preferred_profile_id:
         selected = [preferred_profile_id]
-        selected.extend(
-            item[2]
-            for item in scored
-            if item[2] != preferred_profile_id
-        )
+        selected.extend(item[2] for item in scored if item[2] != preferred_profile_id)
         return tuple(selected[:MAX_SPECIALISTS_PER_TURN])
     if not scored:
         return ("executive",)
@@ -372,9 +368,7 @@ def _sentences(items: Iterable[str]) -> str:
     return " ".join(f"- {item}" for item in items)
 
 
-def render_specialist_briefs(
-    question: str, preferred_profile_id: str = ""
-) -> str:
+def render_specialist_briefs(question: str, preferred_profile_id: str = "") -> str:
     """Render compact, question-specific operating policy for the model."""
 
     blocks = []

@@ -16,7 +16,14 @@ from openjarvis.life.integrations import PROVIDERS, IntegrationsError
 _GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 _MICROSOFT_TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 _STRAVA_TOKEN_ENDPOINT = "https://www.strava.com/oauth/token"
-_REQUEST_TIMEOUT_SECONDS = 15.0
+#: Teto de tempo de UMA requisição a provedor.
+REQUEST_TIMEOUT_SECONDS = 15.0
+
+#: Pior caso de requisições sequenciais numa sincronização: o Gmail faz uma
+#: listagem e depois até 25 GETs de mensagem, um a um. Quem calcula lease ou
+#: deadline precisa deste número — deixá-lo implícito foi o que permitiu o
+#: lease de 300s ficar menor que o próprio pior caso de 390s.
+MAX_SYNC_REQUESTS = 26
 _SAFE_ERROR_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 
 
@@ -71,7 +78,7 @@ class OAuthProviderClient:
         http: httpx.Client | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
-        self._http = http or httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS)
+        self._http = http or httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS)
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def exchange(self, context: OAuthRequestContext, code: str) -> OAuthCredential:
@@ -300,7 +307,7 @@ class OAuthProviderClient:
             response = self._http.post(
                 endpoint,
                 data=form,
-                timeout=_REQUEST_TIMEOUT_SECONDS,
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as exc:
             raise OAuthProviderError(provider, 0, "network_error") from exc
@@ -336,7 +343,7 @@ class OAuthProviderClient:
                 endpoint,
                 params=params,
                 headers={"Authorization": f"Bearer {access_token}"},
-                timeout=_REQUEST_TIMEOUT_SECONDS,
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as exc:
             raise OAuthProviderError(provider, 0, "network_error") from exc

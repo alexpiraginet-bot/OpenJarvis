@@ -25,12 +25,12 @@ from openjarvis.life.db import POSTGRES
 from openjarvis.life.dialogue import MAX_HISTORY_MESSAGES, pending_prompt
 from openjarvis.life.integrations import IntegrationsStore
 from openjarvis.life.schema import SCHEMA
-from openjarvis.life.training import goal_label
 from openjarvis.life.tools import (
     life_record_app,
     life_tools_for,
     normalize_life_record_fields,
 )
+from openjarvis.life.training import goal_label
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 ACTION_TTL_MINUTES = 15

@@ -16,11 +16,20 @@ from openjarvis.life.integrations import (
     IntegrationsError,
     UnknownProviderError,
 )
-from openjarvis.life.oauth_providers import OAuthProviderClient, OAuthProviderError
+from openjarvis.life.oauth_providers import (
+    MAX_SYNC_REQUESTS,
+    REQUEST_TIMEOUT_SECONDS,
+    OAuthProviderClient,
+    OAuthProviderError,
+)
 
 logger = logging.getLogger(__name__)
 
-_SYNC_LEASE_SECONDS = 300
+# O lease precisa cobrir o pior caso do provedor mais lento, senão um segundo
+# worker declara a sincronização abandonada enquanto ela ainda está viva e as
+# duas passam a escrever ao mesmo tempo. Derivado do orçamento real em vez de
+# ser uma constante solta: 300s era menor que os ~390s que o Gmail pode levar.
+_SYNC_LEASE_SECONDS = int(MAX_SYNC_REQUESTS * REQUEST_TIMEOUT_SECONDS) + 60
 _EXPIRY_SKEW_SECONDS = 60
 _ALLOWED_KINDS = frozenset({"activity", "calendar", "mail"})
 

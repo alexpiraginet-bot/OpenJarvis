@@ -221,7 +221,7 @@ class Database:
             ) from exc
         # autocommit=False keeps explicit commit() meaningful, matching the
         # SQLite path so callers behave identically on both.
-        return psycopg.connect(
+        conn = psycopg.connect(
             normalize_postgres_dsn(dsn),
             row_factory=dict_row,
             autocommit=False,
@@ -230,6 +230,16 @@ class Database:
             # statement surviving on the same backend connection.
             prepare_threshold=None,
         )
+        # Fixar o schema explicitamente. Todo o DDL deste pacote é
+        # não-qualificado (`CREATE TABLE users`, não `public.users`), então o
+        # destino real depende do search_path que vier do papel, do banco ou do
+        # pooler. Se ele mudar entre a criação e a leitura, as tabelas passam a
+        # ser criadas num lugar e procuradas em outro — e o sintoma é uma
+        # tabela "que sumiu" em vez de um erro claro.
+        with conn.cursor() as cursor:
+            cursor.execute("SET search_path TO public")
+        conn.commit()
+        return conn
 
     # -- Properties ----------------------------------------------------------
 

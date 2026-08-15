@@ -58,6 +58,7 @@ _GOAL_LABELS = {
     "half_marathon": "Meia maratona",
 }
 
+
 def goal_label(goal: str) -> str:
     """Human name for a training goal, for anything that has to show it.
 
