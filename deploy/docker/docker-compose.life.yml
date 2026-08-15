@@ -1,0 +1,32 @@
+# Jarvis — Life OS, ready to publish.
+#
+#   cd deploy/docker
+#   docker compose -f docker-compose.life.yml up -d --build
+#
+# Then reach it at http://<host>:8100/vida
+#
+# Registration is CLOSED by default. The very first account on an empty
+# database is exempt, so open /vida on the phone, create your account, and
+# every later attempt is refused — nobody who finds the URL can sign
+# themselves up. To run an open beta instead, set OPENJARVIS_LIFE_OPEN_SIGNUP=1.
+
+services:
+  life:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.life
+    ports:
+      - "${LIFE_PORT:-8100}:8100"
+    environment:
+      - OPENJARVIS_LIFE_DB=/data/life.db
+      - OPENJARVIS_LIFE_HOST=0.0.0.0
+      - OPENJARVIS_LIFE_PORT=8100
+      - OPENJARVIS_LIFE_OPEN_SIGNUP=${OPENJARVIS_LIFE_OPEN_SIGNUP:-}
+    volumes:
+      # Named volume, not a bind mount: the client's ledger must survive
+      # `docker compose down` and every rebuild.
+      - life-data:/data
+    restart: unless-stopped
+
+volumes:
+  life-data:

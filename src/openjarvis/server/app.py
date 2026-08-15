@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 import time
 
@@ -314,6 +315,49 @@ def create_app(
     app.include_router(upload_router)
     app.include_router(research_router)
     app.include_router(analytics_router)
+
+    # Life OS — the mobile app's API. Optional: a server without the life
+    # database still serves chat, so a failure here must not take startup down.
+    try:
+        from openjarvis.server.life_routes import create_life_router
+
+        whatsapp_access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+        whatsapp_phone_number_id = os.environ.get(
+            "WHATSAPP_PHONE_NUMBER_ID",
+            "",
+        )
+        life_whatsapp_channel = None
+        if whatsapp_access_token and whatsapp_phone_number_id:
+            from openjarvis.channels.whatsapp import WhatsAppChannel
+
+            life_whatsapp_channel = WhatsAppChannel(
+                access_token=whatsapp_access_token,
+                phone_number_id=whatsapp_phone_number_id,
+            )
+        life_webhook_config = webhook_config or {}
+        life_whatsapp_verify_token = str(
+            life_webhook_config.get("whatsapp_verify_token", "")
+            or os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+        )
+        life_whatsapp_app_secret = str(
+            life_webhook_config.get("whatsapp_app_secret", "")
+            or os.environ.get("WHATSAPP_APP_SECRET", "")
+        )
+        life_router = create_life_router(
+            channel_pepper=os.environ.get(
+                "OPENJARVIS_LIFE_CHANNEL_PEPPER",
+                "",
+            ).encode("utf-8"),
+            whatsapp_channel=life_whatsapp_channel,
+            whatsapp_verify_token=life_whatsapp_verify_token,
+            whatsapp_app_secret=life_whatsapp_app_secret,
+        )
+        app.include_router(life_router)
+        app.state.life_context = getattr(life_router, "life_context", None)
+    except Exception as exc:
+        logger.warning("Life API unavailable: %s", exc)
+        app.state.life_context = None
+
     include_all_routes(app)
 
     # Restore SendBlue channel bindings from database on startup

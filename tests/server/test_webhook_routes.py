@@ -213,6 +213,71 @@ class TestWhatsAppWebhook:
             },
         )
         assert resp.status_code == 200
+        mock_bridge.handle_incoming.assert_called_once_with(
+            "+15551234567",
+            "hello wa",
+            "whatsapp",
+            metadata={
+                "kind": "text",
+                "phone_number_id": "",
+                "message_id": "wamid.abc123",
+            },
+        )
+
+    def test_delivery_receipt_is_acknowledged_without_chat_routing(
+        self, wa_client, mock_bridge
+    ):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "phone-1"},
+                                "statuses": [
+                                    {
+                                        "id": "wamid.sent-1",
+                                        "recipient_id": "15551234567",
+                                        "status": "delivered",
+                                        "timestamp": "1720000000",
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        body_bytes = json.dumps(payload).encode()
+        sig = hmac.new(b"wa_secret", body_bytes, hashlib.sha256).hexdigest()
+
+        resp = wa_client.post(
+            "/webhooks/whatsapp",
+            content=body_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": f"sha256={sig}",
+            },
+        )
+
+        assert resp.status_code == 200
+        mock_bridge.handle_incoming.assert_not_called()
+
+    def test_signed_invalid_json_returns_400(self, wa_client, mock_bridge):
+        body_bytes = b"{not-json"
+        sig = hmac.new(b"wa_secret", body_bytes, hashlib.sha256).hexdigest()
+
+        resp = wa_client.post(
+            "/webhooks/whatsapp",
+            content=body_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": f"sha256={sig}",
+            },
+        )
+
+        assert resp.status_code == 400
+        mock_bridge.handle_incoming.assert_not_called()
 
 
 class TestWebhooksFailClosed:

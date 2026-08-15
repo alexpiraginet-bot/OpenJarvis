@@ -1,0 +1,67 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.py": {
+      "memory": 512,
+      "maxDuration": 300
+    }
+  },
+  "crons": [
+    {
+      "path": "/v1/life/internal/whatsapp/briefings",
+      "schedule": "* * * * *"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/vida",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/v1/life/:path*",
+      "destination": "/api/index/v1/life/:path*"
+    },
+    { "source": "/health", "destination": "/api/index/health" },
+    { "source": "/vida/(.*)", "destination": "/index.html" },
+    { "source": "/vida", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=31536000; includeSubDomains"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; base-uri 'self'; connect-src 'self' https://api.openai.com; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+        }
+      ]
+    }
+  ]
+}

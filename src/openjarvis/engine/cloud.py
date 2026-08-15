@@ -31,6 +31,7 @@ PRICING: Dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-5": (10.00, 30.00),
     "gpt-5.4": (15.00, 60.00),
+    "gpt-5.6-luna": (1.00, 6.00),
     "gpt-5-mini": (0.25, 2.00),
     "o3-mini": (1.10, 4.40),
     "claude-sonnet-4-20250514": (3.00, 15.00),
@@ -38,6 +39,7 @@ PRICING: Dict[str, tuple[float, float]] = {
     "claude-haiku-3-5-20241022": (0.80, 4.00),
     "claude-opus-4-6": (5.00, 25.00),
     "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-5": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.5-flash": (0.30, 2.50),
@@ -61,6 +63,7 @@ _OPENAI_MODELS = [
     "gpt-4o-mini",
     "gpt-5",
     "gpt-5.4",
+    "gpt-5.6-luna",
     "gpt-5-mini",
     "o3-mini",
 ]
@@ -70,6 +73,7 @@ _ANTHROPIC_MODELS = [
     "claude-haiku-3-5-20241022",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
+    "claude-sonnet-5",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
 ]
@@ -136,6 +140,11 @@ def _is_anthropic_model(model: str) -> bool:
     return "claude" in model.lower() and not _is_openrouter_model(model)
 
 
+def _anthropic_accepts_temperature(model: str) -> bool:
+    """Sonnet 5 rejects non-default sampling parameters with HTTP 400."""
+    return model.lower() != "claude-sonnet-5"
+
+
 def _is_google_model(model: str) -> bool:
     return "gemini" in model.lower() and not _is_openrouter_model(model)
 
@@ -172,10 +181,10 @@ def _is_openai_model(model: str) -> bool:
 def _is_openai_reasoning_model(model: str) -> bool:
     """Check if model is an OpenAI reasoning model that restricts temperature."""
     m = model.lower()
-    # o1/o3 series and gpt-5-mini (all variants) are reasoning models
+    # o1/o3 series and GPT-5 reasoning models restrict temperature.
     if m.startswith(("o1", "o3")):
         return True
-    return m == "gpt-5-mini" or m.startswith("gpt-5-mini-")
+    return m.startswith("gpt-5")
 
 
 def _is_unsupported_temperature_error(exc: Exception) -> bool:
@@ -202,10 +211,11 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
     # Try exact match first, then prefix match
     prices = PRICING.get(model)
     if prices is None:
-        for key, val in PRICING.items():
-            if model.startswith(key):
-                prices = val
-                break
+        matches = [key for key in PRICING if model.startswith(key)]
+        if matches:
+            # Dated variants such as gpt-5.4-* also match the shorter gpt-5
+            # prefix. The most specific key is the only safe price ceiling.
+            prices = PRICING[max(matches, key=len)]
     if prices is None:
         return 0.0
     input_cost = (prompt_tokens / 1_000_000) * prices[0]
@@ -663,9 +673,10 @@ class CloudEngine(InferenceEngine):
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": chat_msgs,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if _anthropic_accepts_temperature(model):
+            create_kwargs["temperature"] = temperature
         if system_text:
             create_kwargs["system"] = system_text
 
@@ -1258,9 +1269,10 @@ class CloudEngine(InferenceEngine):
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": chat_msgs,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if _anthropic_accepts_temperature(model):
+            create_kwargs["temperature"] = temperature
         if system_text:
             create_kwargs["system"] = system_text
         with self._anthropic_client.messages.stream(**create_kwargs) as stream:
@@ -1511,9 +1523,10 @@ class CloudEngine(InferenceEngine):
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": chat_msgs,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if _anthropic_accepts_temperature(model):
+            create_kwargs["temperature"] = temperature
         if system_text:
             create_kwargs["system"] = system_text
         raw_tools = kwargs.pop("tools", None)

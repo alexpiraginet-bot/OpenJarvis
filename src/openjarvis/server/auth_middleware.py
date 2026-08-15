@@ -50,7 +50,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         ``/metrics`` exposes request/token counters that should not be readable
         by unauthenticated clients, so it is gated alongside ``/v1`` and
         ``/api``. ``/health`` stays open for liveness probes.
+
+        ``/v1/life/*`` is exempt because it authenticates *per client* rather
+        than per server: the mobile app holds a revocable user token issued by
+        :mod:`openjarvis.life.tenancy`, never the operator's shared API key.
+        Its routes enforce that themselves via a bearer dependency, so this is
+        a change of mechanism, not a gap — see ``server/life_routes.py``.
         """
+        if path.startswith("/v1/life/"):
+            return False
         return (
             path.startswith("/v1/")
             or path.startswith("/api/")

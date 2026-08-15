@@ -1,0 +1,33 @@
+# Runtime dependencies for the Vercel serverless function.
+#
+# Deliberately not `openjarvis[server]`: that pulls the research stack —
+# datasets, ddgs, telegram, posthog — none of which the Life API imports. This
+# list was derived by importing `openjarvis.life.server` and recording what
+# actually loaded, so it is the real closure rather than a guess.
+#
+# `openjarvis` itself is not installed from PyPI; the build script vendors the
+# source tree next to the function (see scripts/build-vercel.sh).
+
+fastapi>=0.110
+pydantic>=2.0
+python-multipart>=0.0.9
+
+# PostgreSQL. The binary wheel avoids needing libpq on the build image.
+psycopg[binary]>=3.1
+
+# Apple App Attest validation for privileged iPhone-only integrations.
+cbor2>=5.6
+cryptography>=43
+
+# Pulled in transitively by `openjarvis/__init__` → sdk → engine/telemetry.
+# Importing any openjarvis submodule executes that package __init__, so these
+# are unavoidable without restructuring the framework's entrypoint.
+click>=8
+rich>=13
+httpx>=0.27
+nvidia-ml-py>=12.560.30
+
+# Jarvis' internal reasoning engine. It is initialized when either provider
+# key exists; otherwise the API stays online in data-only mode.
+openai>=1.30
+anthropic>=0.30

@@ -101,6 +101,31 @@ class TestCloudOpenAI:
         # $0.25/M input + $2.00/M output = $2.25
         assert cost == pytest.approx(2.25)
 
+    def test_gpt_5_6_luna_cost_and_latency_controls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine = _make_cloud_engine(monkeypatch)
+        fake_client = mock.MagicMock()
+        fake_client.chat.completions.create.return_value = _fake_openai_response(
+            content="Olá", model="gpt-5.6-luna"
+        )
+        engine._openai_client = fake_client
+
+        result = engine.generate(
+            [Message(role=Role.USER, content="Oi")],
+            model="gpt-5.6-luna",
+            reasoning_effort="none",
+            verbosity="low",
+        )
+
+        assert result["content"] == "Olá"
+        sent = fake_client.chat.completions.create.call_args.kwargs
+        assert sent["reasoning_effort"] == "none"
+        assert sent["verbosity"] == "low"
+        assert estimate_cost("gpt-5.6-luna", 1_000_000, 1_000_000) == pytest.approx(
+            7.00
+        )
+
     def test_gpt_5_mini_tool_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         engine = _make_cloud_engine(monkeypatch)
         fake_tool_call = SimpleNamespace(
@@ -175,6 +200,26 @@ class TestCloudAnthropic:
         )
         assert result["content"] == "I am Sonnet 4.6"
 
+    def test_claude_sonnet_5_omits_sampling_temperature(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine = _make_cloud_engine(monkeypatch)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.return_value = _fake_anthropic_response(
+            content="I am Sonnet 5", model="claude-sonnet-5"
+        )
+        engine._anthropic_client = fake_client
+
+        result = engine.generate(
+            [Message(role=Role.USER, content="Hi")],
+            model="claude-sonnet-5",
+            temperature=0.7,
+        )
+
+        assert result["content"] == "I am Sonnet 5"
+        sent = fake_client.messages.create.call_args.kwargs
+        assert "temperature" not in sent
+
     def test_claude_haiku_4_5_generate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         engine = _make_cloud_engine(monkeypatch)
         fake_client = mock.MagicMock()
@@ -197,6 +242,10 @@ class TestCloudAnthropic:
         cost = estimate_cost("claude-sonnet-4-6", 1_000_000, 1_000_000)
         assert cost == pytest.approx(18.00)
 
+        # Use Sonnet 5's standard price as the conservative budget ceiling.
+        cost = estimate_cost("claude-sonnet-5", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(18.00)
+
         # claude-haiku-4-5: $1.00/M in, $5.00/M out
         cost = estimate_cost("claude-haiku-4-5", 1_000_000, 1_000_000)
         assert cost == pytest.approx(6.00)
@@ -204,6 +253,7 @@ class TestCloudAnthropic:
     def test_anthropic_routing(self) -> None:
         assert _is_anthropic_model("claude-opus-4-6") is True
         assert _is_anthropic_model("claude-sonnet-4-6") is True
+        assert _is_anthropic_model("claude-sonnet-5") is True
         assert _is_anthropic_model("claude-haiku-4-5") is True
         assert _is_anthropic_model("gpt-5-mini") is False
         assert _is_anthropic_model("gemini-3-pro") is False
@@ -632,8 +682,10 @@ class TestPricingTable:
     def test_all_new_models_in_pricing(self) -> None:
         expected = [
             "gpt-5-mini",
+            "gpt-5.6-luna",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
+            "claude-sonnet-5",
             "claude-haiku-4-5",
             "gemini-2.5-pro",
             "gemini-2.5-flash",

@@ -104,3 +104,35 @@ def test_openai_tts_synthesize():
 
     assert result.audio == b"fake-openai-audio"
     assert result.voice_id == "nova"
+
+
+def test_openai_tts_defaults_to_premium_jarvis_voice():
+    from openjarvis.speech.openai_tts import OpenAITTSBackend
+
+    backend = OpenAITTSBackend(api_key="fake-key", instructions="Calm and precise")
+
+    with patch(
+        "openjarvis.speech.openai_tts._openai_tts_request",
+        return_value=b"fake-openai-audio",
+    ) as request:
+        result = backend.synthesize("Bom dia", voice_id="")
+
+    assert result.voice_id == "cedar"
+    request.assert_called_once_with(
+        "fake-key",
+        "Bom dia",
+        voice="cedar",
+        model="gpt-4o-mini-tts",
+        speed=1.0,
+        response_format="mp3",
+        instructions="Calm and precise",
+    )
+
+
+def test_openai_tts_lists_current_voice_catalog():
+    from openjarvis.speech.openai_tts import OpenAITTSBackend
+
+    voices = OpenAITTSBackend(api_key="fake-key").available_voices()
+
+    assert "cedar" in voices
+    assert "marin" in voices

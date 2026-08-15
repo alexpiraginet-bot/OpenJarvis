@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
+    <key>CFBundleDisplayName</key>
+    <string>Jarvis</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+    <key>JarvisAppURL</key>
+    <string>$(JARVIS_APP_URL)</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>127.0.0.1</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+            <key>localhost</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>O Jarvis usa o microfone quando você toca para falar e anima o núcleo em tempo real.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>O Jarvis usa seu calendário para mostrar compromissos e criar eventos somente após sua confirmação.</string>
+    <key>NSFaceIDUsageDescription</key>
+    <string>O Jarvis usa o Face ID para proteger seus dados pessoais, financeiros e de saúde.</string>
+    <key>NSHealthShareUsageDescription</key>
+    <string>O Jarvis lê passos, sono, frequência cardíaca, energia ativa e treinos para personalizar seu resumo de saúde e seu coach.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>O Jarvis não grava nem altera dados no app Saúde; a integração HealthKit é somente para leitura.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>O Jarvis transforma sua fala em comandos para organizar sua vida.</string>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIRequiresFullScreen</key>
+    <true/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+</dict>
+</plist>

@@ -177,6 +177,7 @@ nav:
       - Design Principles: architecture/design-principles.md
   - API Reference: api-reference/
   - User Guide:
+      - Jarvis App (assistente pessoal): user-guide/life-app.md
       - CLI: user-guide/cli.md
       - Pearl CLI: user-guide/pearl.md
       - Pearl Mining: user-guide/mining.md
