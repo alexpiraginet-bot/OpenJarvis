@@ -30,9 +30,7 @@ def test_life_function_allows_a_five_minute_briefing_batch():
 def test_realtime_webrtc_origin_is_allowed_by_content_security_policy():
     """The browser must be able to exchange SDP with OpenAI Realtime."""
     root_headers = next(
-        entry["headers"]
-        for entry in _config()["headers"]
-        if entry["source"] == "/(.*)"
+        entry["headers"] for entry in _config()["headers"] if entry["source"] == "/(.*)"
     )
     csp = next(
         header["value"]

@@ -28,9 +28,7 @@ JARVIS_VOICE_ID = "cedar"
 JARVIS_VOICE_MODEL = "gpt-4o-mini-tts"
 JARVIS_REALTIME_MODEL = "gpt-realtime-2.1"
 JARVIS_REALTIME_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
-JARVIS_REALTIME_CLIENT_SECRETS_URL = (
-    "https://api.openai.com/v1/realtime/client_secrets"
-)
+JARVIS_REALTIME_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
 _REALTIME_TOKEN_WINDOW_SECONDS = 60.0
 _REALTIME_TOKEN_USER_LIMIT = 3
 JARVIS_VOICE_INSTRUCTIONS = (
