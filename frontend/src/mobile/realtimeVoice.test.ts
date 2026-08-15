@@ -164,8 +164,14 @@ describe('RealtimeVoiceSession', () => {
           Authorization: 'Bearer ek_test_ephemeral',
           'Content-Type': 'application/sdp',
         },
+        // O handshake tem que ser abortável: é uma chamada direta à OpenAI,
+        // fora do nosso proxy, e o fallback para o modo legado depende dela
+        // desistir em vez de ficar pendurada.
+        signal: expect.any(AbortSignal),
       },
     );
+    const init = sdpFetch.mock.calls[0][1] as RequestInit;
+    expect(init.signal?.aborted).toBe(false);
   });
 
   it('streams interim text and forwards each final VAD turn once', async () => {

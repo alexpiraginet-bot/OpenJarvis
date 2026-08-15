@@ -25,6 +25,7 @@ from openjarvis.life.db import POSTGRES
 from openjarvis.life.dialogue import MAX_HISTORY_MESSAGES, pending_prompt
 from openjarvis.life.integrations import IntegrationsStore
 from openjarvis.life.schema import SCHEMA
+from openjarvis.life.training import goal_label
 from openjarvis.life.tools import (
     life_record_app,
     life_tools_for,
@@ -172,6 +173,18 @@ def _summary(
         detail = f" de {amount}" if amount else ""
         return f"Confirmar {action}{detail}" + (f": {label}" if label else "")
     fields = arguments.get("fields") or {}
+    if kind == "training_profile":
+        # Um perfil de treino não tem name, title nem amount_cents, então o
+        # resumo genérico abaixo virava um "Confirmar novo perfil de treino"
+        # pelado: o único campo que o cliente realmente escolheu ficava
+        # invisível justamente no momento em que ele poderia pegar o erro.
+        goal = str(fields.get("primary_goal") or "").strip()
+        detail = goal_label(goal) if goal else "objetivo não informado"
+        weekly_days = fields.get("weekly_days")
+        if isinstance(weekly_days, int) and not isinstance(weekly_days, bool):
+            if weekly_days > 0:
+                detail += f", {weekly_days}x por semana"
+        return f"Confirmar novo {label_kind}: {detail}"
     label = fields.get("name") or fields.get("title") or fields.get("description")
     amount = _format_money(fields.get("amount_cents"), currency)
     detail = f" de {amount}" if amount else ""

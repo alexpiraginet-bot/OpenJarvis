@@ -438,7 +438,12 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
     if (!callback) return;
     setSelectedId(callback.provider);
     if (callback.status === 'connected') {
-      setNotice('Conexão autorizada. Sincronize agora para atualizar o Jarvis.');
+      // `status=connected` vem da query string, que qualquer um pode digitar:
+      // ela prova que o navegador voltou do fluxo, não que o provedor ficou
+      // conectado. Trata como gatilho de releitura — quem diz se conectou é o
+      // catálogo do backend, e o chip do provedor mostra o estado real.
+      overview.reload();
+      setNotice('Verificando a autorização com o provedor…');
     } else {
       setError('A autorização não foi concluída. Tente conectar novamente.');
     }
@@ -1072,7 +1077,25 @@ function WhatsAppBriefingSettings() {
     }
   }
 
-  if (preference.loading || !draft) {
+  if (preference.loading) {
+    return <div className="oj-wa-briefing-loading">Carregando briefing…</div>;
+  }
+  // `draft` só é preenchido pelo useEffect quando `preference.data` chega, então
+  // em erro ele fica null para sempre: a guarda antiga prendia a tela no texto
+  // de carregamento e o bloco de erro lá embaixo nunca era alcançado.
+  if (preference.error) {
+    return (
+      <div className="oj-wa-briefing">
+        <div className="oj-conn-error-note" role="alert">
+          {preference.error}
+        </div>
+        <button type="button" className="oj-btn" onClick={preference.reload}>
+          Tentar de novo
+        </button>
+      </div>
+    );
+  }
+  if (!draft) {
     return <div className="oj-wa-briefing-loading">Carregando briefing…</div>;
   }
 

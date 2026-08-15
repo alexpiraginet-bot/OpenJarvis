@@ -45,6 +45,7 @@ import {
   useLoader,
 } from '../ui';
 import { SkeletonRows, SkeletonScreen } from '../Skeleton';
+import { confirmedProposalSucceeded } from '../JarvisCore';
 
 const CATEGORIES = [
   'mercado',
@@ -59,6 +60,14 @@ const CATEGORIES = [
 
 const CATEGORY_OPTIONS = CATEGORIES.map((value) => ({ value, label: value }));
 
+const PROPOSAL_STATUS_LABELS: Record<string, string> = {
+  confirmed: 'Lançado',
+  canceled: 'Rejeitado por você',
+  failed: 'Falhou',
+  expired: 'Expirou',
+  executing: 'Executando…',
+};
+
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunkSize = 0x8000;
@@ -71,9 +80,12 @@ export function bytesToBase64(bytes: Uint8Array): string {
 export function FinancialCandidateList({
   candidates,
   currency,
+  pending = true,
 }: {
   candidates: FinancialCandidate[];
   currency: string;
+  /** Ainda há proposta esperando decisão? Sem isto a lista jurava que sim. */
+  pending?: boolean;
 }) {
   return (
     <div className="oj-finance-candidates">
@@ -85,7 +97,9 @@ export function FinancialCandidateList({
               {candidate.category} · {formatShortDate(candidate.occurred_on)} ·{' '}
               {Math.round(candidate.confidence * 100)}% de confiança
             </div>
-            <small>Aguardando revisão antes de entrar no financeiro.</small>
+            {pending && (
+              <small>Aguardando revisão antes de entrar no financeiro.</small>
+            )}
           </div>
           <div className={candidate.kind === 'income' ? 'oj-pos' : 'oj-neg'}>
             {candidate.kind === 'income' ? '+' : '−'}
@@ -156,6 +170,19 @@ export function FinancialDocumentsTab({
         : undefined;
       const result = await confirmAction(proposal.id, 'explicit', proof);
       replaceProposal(result.proposal);
+      // O backend responde 200 mesmo quando a ferramenta falha: o status vem
+      // 'failed' no corpo (jarvis.py:663). Sem este teste, uma falha do
+      // servidor era exibida como se o usuário tivesse rejeitado o item.
+      if (!confirmedProposalSucceeded(result.proposal)) {
+        const detail = result.proposal.result?.error ?? result.proposal.result?.detail;
+        setError(
+          typeof detail === 'string' && detail.trim()
+            ? detail
+            : 'A ação não foi concluída. Revise os dados e tente novamente.',
+        );
+        return;
+      }
+      documents.reload();
       onChanged();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Falha ao confirmar lançamento');
@@ -170,6 +197,7 @@ export function FinancialDocumentsTab({
     try {
       const result = await cancelAction(proposal.id);
       replaceProposal(result.proposal);
+      documents.reload();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Falha ao rejeitar lançamento');
     } finally {
@@ -212,6 +240,9 @@ export function FinancialDocumentsTab({
           <FinancialCandidateList
             candidates={analysis.document.analysis.candidates}
             currency={currency}
+            pending={analysis.proposals.some(
+              (proposal) => proposal.status === 'pending',
+            )}
           />
           <div className="oj-finance-proposal-actions">
             {analysis.proposals.map((proposal, index) => (
@@ -223,7 +254,10 @@ export function FinancialDocumentsTab({
                     <button type="button" aria-label={`Confirmar item ${index + 1}`} disabled={busy === proposal.id} onClick={() => void confirm(proposal)}><Check size={17} /></button>
                   </div>
                 ) : (
-                  <strong>{proposal.status === 'confirmed' ? 'Lançado' : 'Rejeitado'}</strong>
+                  // 'failed', 'expired' e 'canceled' são coisas diferentes:
+                  // chamar as três de "Rejeitado" faz uma falha do servidor
+                  // parecer decisão do usuário.
+                  <strong>{PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status}</strong>
                 )}
               </div>
             ))}
@@ -247,7 +281,10 @@ export function FinancialDocumentsTab({
                 key={document.id}
                 title={document.filename}
                 sub={`${document.analysis.candidates.length} item(ns) · ${document.document_kind === 'statement' ? 'extrato' : 'comprovante'}`}
-                value="Revisado"
+                // O backend só devolve documentos com status 'review_required'
+                // (financial_documents.py:219 filtra por ele), então "Revisado"
+                // era o oposto da verdade em todas as linhas.
+                value="Aguardando revisão"
               />
             ))}
           </ListGroup>
@@ -391,6 +428,10 @@ export function BillsTab({
       return;
     }
     setError('');
+    // Cada chamada de runFinanceMutation cria um operation_id novo
+    // (crypto.randomUUID), e o servidor deduplica por (user_id, operation_id).
+    // Dois toques no botão são, para ele, duas contas distintas.
+    setBusy('add');
     try {
       await runFinanceMutation((operationId, approval) =>
         createRecord<Bill>(
@@ -412,6 +453,8 @@ export function BillsTab({
       onChanged();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Falha ao salvar');
+    } finally {
+      setBusy('');
     }
   }
 
@@ -496,7 +539,7 @@ export function BillsTab({
               { value: 'yearly', label: 'Anual' },
             ]}
           />
-          <Button onClick={handleAdd}>Salvar</Button>
+          <Button disabled={Boolean(busy)} onClick={handleAdd}>{busy === 'add' ? 'Salvando…' : 'Salvar'}</Button>
         </Sheet>
       )}
     </>
@@ -518,6 +561,7 @@ export function TransactionsTab({
   );
   const accounts = useLoader(listAccounts);
   const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState('mercado');
   const [description, setDescription] = useState('');
@@ -540,6 +584,9 @@ export function TransactionsTab({
       return;
     }
     setError('');
+    // Mesmo motivo do BillsTab: sem trava, cada toque vira um operation_id
+    // novo e a idempotência do servidor não tem como reconhecer a repetição.
+    setBusy(true);
     try {
       await runFinanceMutation((operationId, approval) =>
         createRecord<Transaction>(
@@ -563,6 +610,8 @@ export function TransactionsTab({
       onChanged();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Falha ao salvar');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -623,7 +672,7 @@ export function TransactionsTab({
             placeholder="Feira da semana"
           />
           <Field label="Data" value={occurredOn} onChange={setOccurredOn} type="date" />
-          <Button onClick={handleAdd}>Salvar</Button>
+          <Button disabled={busy} onClick={handleAdd}>{busy ? 'Salvando…' : 'Salvar'}</Button>
         </Sheet>
       )}
     </>

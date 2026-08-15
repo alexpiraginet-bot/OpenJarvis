@@ -354,7 +354,11 @@ class LifeRecordTool(_LifeTool):
                             "health_observation: kind, value, unit. condition and "
                             "medication: name. nutrition: meal_type, description. "
                             "training_profile: primary_sport, secondary_sports, "
-                            "primary_goal, level, agenda and history. training_plan: "
+                            "primary_goal, level, weekly_days, "
+                            "available_weekdays, session_minutes, "
+                            "current_weekly_km, longest_recent_run_km, "
+                            "target_distance_km, target_date, equipment, "
+                            "limitations. training_plan: "
                             "start_on and weeks. training_checkin/training_feedback: "
                             "session_id plus readiness or completion metrics."
                         ),

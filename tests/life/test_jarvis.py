@@ -119,6 +119,42 @@ def test_specialist_proposals_use_human_labels(life, user, kind, fields, expecte
     assert f"Confirmar novo {expected}" in proposal["summary"]
 
 
+def test_training_profile_confirmation_names_the_objective(life, user):
+    """O objetivo é a única coisa que o cliente escolheu — tem que aparecer.
+
+    O resumo genérico procura name/title/description/amount_cents, e um perfil
+    de treino não tem nenhum dos quatro. O card ficava "Confirmar novo perfil
+    de treino" e nada mais, então um objetivo trocado passava direto pelo
+    único momento em que dava para pegar.
+    """
+    proposal = JarvisActionStore(life).create(
+        user.id,
+        "life_record",
+        {
+            "kind": "training_profile",
+            "fields": {
+                "primary_sport": "running",
+                "primary_goal": "half_marathon",
+                "weekly_days": 4,
+            },
+        },
+    )
+
+    assert "Meia maratona" in proposal["summary"]
+    assert "4x por semana" in proposal["summary"]
+
+
+def test_training_profile_confirmation_admits_a_missing_objective(life, user):
+    """Ausente tem que aparecer como ausente, não virar silêncio."""
+    proposal = JarvisActionStore(life).create(
+        user.id,
+        "life_record",
+        {"kind": "training_profile", "fields": {"primary_sport": "running"}},
+    )
+
+    assert "objetivo não informado" in proposal["summary"]
+
+
 @pytest.mark.parametrize("amount", [True, 4590.0, "45.90", None])
 def test_non_integer_amount_is_rejected_before_proposal(life, user, amount):
     actions = JarvisActionStore(life)

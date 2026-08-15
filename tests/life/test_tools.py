@@ -136,7 +136,10 @@ def test_record_tool_can_operate_the_coach_from_voice(life, user, tools):
         fields={
             "primary_sport": "canoeing",
             "secondary_sports": ["strength"],
-            "primary_goal": "general_fitness",
+            # Deliberadamente diferente de "general_fitness": aquele é o valor
+            # que `save_profile` usa como default silencioso, então um teste
+            # que o escolhe passa mesmo que o campo seja jogado fora.
+            "primary_goal": "hypertrophy",
             "level": "intermediate",
             "weekly_days": 4,
             "available_weekdays": [1, 3, 5, 7],
@@ -179,6 +182,7 @@ def test_record_tool_can_operate_the_coach_from_voice(life, user, tools):
     assert checkin.success
     assert feedback.success
     assert json.loads(profile.content)["record"]["primary_sport"] == "canoeing"
+    assert json.loads(profile.content)["record"]["primary_goal"] == "hypertrophy"
     assert json.loads(plan.content)["record"]["weeks"] == 4
     assert json.loads(checkin.content)["record"]["recommendation"] == "ready"
     assert json.loads(feedback.content)["record"]["feedback"]["completion_pct"] == 100

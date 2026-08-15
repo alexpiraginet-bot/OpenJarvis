@@ -58,6 +58,16 @@ _GOAL_LABELS = {
     "half_marathon": "Meia maratona",
 }
 
+def goal_label(goal: str) -> str:
+    """Human name for a training goal, for anything that has to show it.
+
+    Public because the confirmation card has to name the objective before the
+    client approves it — reading the private map from another module would be
+    worse than exposing the one lookup it needs.
+    """
+    return _GOAL_LABELS.get(goal, goal)
+
+
 _DEFAULT_WEEKLY_KM = {"beginner": 8.0, "intermediate": 20.0, "advanced": 35.0}
 _BASE_PACE = {"beginner": 7.0, "intermediate": 6.0, "advanced": 5.0}
 _SESSION_PATTERNS = {

@@ -164,14 +164,26 @@ export class RealtimeVoiceSession {
       if (!offer.sdp) {
         throw new Error('Jarvis realtime connection unavailable');
       }
-      const sdpResponse = await this.dependencies.fetch(REALTIME_CALLS_URL, {
-        method: 'POST',
-        body: offer.sdp,
-        headers: {
-          Authorization: `Bearer ${token.clientSecret}`,
-          'Content-Type': 'application/sdp',
-        },
-      });
+      // Troca de SDP direto com a OpenAI, fora do nosso proxy. Sem sinal ela
+      // pode ficar pendurada indefinidamente numa rede ruim, e como o fallback
+      // para o modo legado só acontece quando isto lança, o usuário ficava sem
+      // voz nenhuma em vez de cair para o caminho antigo.
+      const handshake = new AbortController();
+      const handshakeTimer = setTimeout(() => handshake.abort(), 15_000);
+      let sdpResponse: Response;
+      try {
+        sdpResponse = await this.dependencies.fetch(REALTIME_CALLS_URL, {
+          method: 'POST',
+          body: offer.sdp,
+          headers: {
+            Authorization: `Bearer ${token.clientSecret}`,
+            'Content-Type': 'application/sdp',
+          },
+          signal: handshake.signal,
+        });
+      } finally {
+        clearTimeout(handshakeTimer);
+      }
       if (!sdpResponse.ok) {
         throw new Error('Jarvis realtime connection unavailable');
       }
