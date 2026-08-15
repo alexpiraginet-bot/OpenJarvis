@@ -355,6 +355,16 @@ export function BillsTab({
   const defaultAccount = accounts.data?.records?.[0]?.id ?? '';
 
   async function handlePay(bill: Bill) {
+    // Sem a conta bancária resolvida o backend marca a conta como paga e lança
+    // a despesa, mas `service.add_transaction` só mexe no saldo `if account_id`
+    // — a conta sumiria da lista com o saldo intacto. Errar aqui é pior que
+    // recusar, porque o usuário acredita no número que sobra na tela.
+    if (accounts.error) {
+      setError(
+        'Não deu para carregar suas contas. Recarregue antes de pagar — assim o saldo não seria debitado.',
+      );
+      return;
+    }
     setBusy(bill.id);
     setError('');
     try {
@@ -401,7 +411,10 @@ export function BillsTab({
     }
   }
 
-  if (bills.loading) return <SkeletonScreen />;
+  // Esperar as contas também: a tela usa `defaultAccount` para debitar o saldo,
+  // e renderizar antes de o loader resolver deixa uma janela em que "Pagar"
+  // funciona pela metade.
+  if (bills.loading || accounts.loading) return <SkeletonScreen />;
 
   return (
     <>
@@ -508,6 +521,14 @@ export function TransactionsTab({
   const [error, setError] = useState('');
 
   async function handleAdd() {
+    // Mesmo motivo do pagamento de contas: sem conta resolvida o lançamento
+    // entra no extrato e no "saiu no mês", mas não sai do saldo.
+    if (accounts.error) {
+      setError(
+        'Não deu para carregar suas contas. Recarregue antes de lançar — assim o saldo não seria atualizado.',
+      );
+      return;
+    }
     const cents = parseMoney(amount);
     if (cents <= 0) {
       setError('Informe um valor.');
@@ -540,7 +561,7 @@ export function TransactionsTab({
     }
   }
 
-  if (transactions.loading) return <SkeletonScreen />;
+  if (transactions.loading || accounts.loading) return <SkeletonScreen />;
   const records = transactions.data?.records ?? [];
 
   return (
