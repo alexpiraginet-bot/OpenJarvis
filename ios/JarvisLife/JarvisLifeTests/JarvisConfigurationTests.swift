@@ -8,6 +8,20 @@ final class JarvisConfigurationTests: XCTestCase {
         NSError(domain: DCErrorDomain, code: code.rawValue)
     }
 
+    func testHealthKitUsageDescriptionsDeclareReadOnlyAccess() {
+        let readPurpose = Bundle.main.object(
+            forInfoDictionaryKey: "NSHealthShareUsageDescription"
+        ) as? String
+        let updatePurpose = Bundle.main.object(
+            forInfoDictionaryKey: "NSHealthUpdateUsageDescription"
+        ) as? String
+
+        XCTAssertFalse(readPurpose?.isEmpty ?? true)
+        XCTAssertFalse(updatePurpose?.isEmpty ?? true)
+        XCTAssertTrue(updatePurpose?.contains("não grava nem altera") ?? false)
+        XCTAssertTrue(updatePurpose?.contains("somente para leitura") ?? false)
+    }
+
     func testAcceptsHTTPSApplicationURL() {
         let url = JarvisConfiguration.validatedAppURL("https://jarvis.example/vida")
         XCTAssertEqual(url?.absoluteString, "https://jarvis.example/vida")

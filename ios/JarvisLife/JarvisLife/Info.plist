@@ -50,6 +50,8 @@
     <string>O Jarvis usa o Face ID para proteger seus dados pessoais, financeiros e de saúde.</string>
     <key>NSHealthShareUsageDescription</key>
     <string>O Jarvis lê passos, sono, frequência cardíaca, energia ativa e treinos para personalizar seu resumo de saúde e seu coach.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>O Jarvis não grava nem altera dados no app Saúde; a integração HealthKit é somente para leitura.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>O Jarvis transforma sua fala em comandos para organizar sua vida.</string>
     <key>UIApplicationSceneManifest</key>
