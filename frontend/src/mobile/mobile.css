@@ -1119,7 +1119,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 4px 16px calc(32px + env(safe-area-inset-bottom));
+  padding: 4px 16px 32px;
 }
 
 /* -- Content primitives --------------------------------------------------- */
@@ -2878,7 +2878,7 @@ input:focus-visible {
 }
 
 .oj-window-body {
-  padding: 4px 14px calc(32px + env(safe-area-inset-bottom));
+  padding: 4px 14px 32px;
 }
 
 .oj-card,
@@ -3867,8 +3867,9 @@ input:focus-visible {
 
 .oj-login {
   display: block;
-  padding: calc(18px + env(safe-area-inset-top)) 18px
-    calc(22px + env(safe-area-inset-bottom));
+  /* Filho em fluxo de `.oj-mobile`, que já aplica os insets: repetir aqui
+   * empurrava o primeiro elemento ~142px para baixo no iPhone. */
+  padding: 18px 18px 22px;
   scrollbar-width: none;
 }
 
@@ -4285,7 +4286,18 @@ input:focus-visible {
 
 .oj-home {
   gap: 13px;
-  padding: 15px 14px calc(30px + env(safe-area-inset-bottom));
+  /* O inset de topo é obrigatório aqui. `.oj-shell-layer` é `position:
+   * absolute`, e o bloco contentor de um absoluto é a PADDING BOX do
+   * ancestral — então a camada cobre o padding de safe area de `.oj-mobile`
+   * em vez de respeitá-lo. Como a WKWebView usa `ignoresSafeArea()` com
+   * `contentInsetAdjustmentBehavior = .never`, o CSS é o único responsável, e
+   * sem isto a saudação e o botão de sair ficam sob a Dynamic Island.
+   *
+   * Corrigido aqui, e não na camada: `.oj-jarvis` e `.oj-hud-bottom` também
+   * vivem dentro dela e já somam o inset inferior por conta própria —
+   * reservá-lo na camada criaria faixa morta nos dois. */
+  padding: calc(15px + env(safe-area-inset-top)) 14px
+    calc(30px + env(safe-area-inset-bottom));
 }
 
 .oj-home-head {
@@ -4838,7 +4850,9 @@ input:focus-visible {
 }
 
 .oj-window-body {
-  padding: 7px 14px calc(34px + env(safe-area-inset-bottom));
+  /* Sem env() aqui: `.oj-app-layer .oj-window` já reserva o home indicator.
+   * Contar nos dois níveis é o que criava a faixa morta no fim da aba. */
+  padding: 7px 14px 34px;
 }
 
 .oj-card,
