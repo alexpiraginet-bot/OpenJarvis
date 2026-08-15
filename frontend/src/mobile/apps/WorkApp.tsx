@@ -18,10 +18,10 @@ import {
   Row,
   Section,
   Sheet,
-  Spinner,
   Stat,
   useLoader,
 } from '../ui';
+import { SkeletonScreen } from '../Skeleton';
 
 export function TasksTab({ onChanged }: { onChanged: () => void }) {
   const summary = useLoader(fetchWorkSummary);
@@ -72,7 +72,7 @@ export function TasksTab({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (tasks.loading) return <Spinner />;
+  if (tasks.loading) return <SkeletonScreen />;
 
   const records = tasks.data?.records ?? [];
   const open = records.filter((task) => task.status !== 'done');
@@ -208,7 +208,7 @@ export function ProjectsTab() {
     }
   }
 
-  if (projects.loading) return <Spinner />;
+  if (projects.loading) return <SkeletonScreen />;
   const records = projects.data?.records ?? [];
 
   return (

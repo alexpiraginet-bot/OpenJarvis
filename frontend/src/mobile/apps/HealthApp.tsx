@@ -34,10 +34,10 @@ import {
   Row,
   Section,
   Sheet,
-  Spinner,
   Stat,
   useLoader,
 } from '../ui';
+import { SkeletonScreen } from '../Skeleton';
 
 export function parsePositiveHealthNumber(input: string): number | null {
   const value = Number.parseFloat(input.trim().replace(',', '.'));
@@ -136,7 +136,7 @@ function VoiceFirstHealthCard() {
 
 export function HealthOverview() {
   const health = useLoader(fetchHealthSummary);
-  if (health.loading) return <Spinner />;
+  if (health.loading) return <SkeletonScreen />;
   if (health.error) return <div className="oj-error">{health.error}</div>;
   if (!health.data) return null;
 
@@ -302,7 +302,7 @@ export function HealthProfileTab({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (health.loading) return <Spinner />;
+  if (health.loading) return <SkeletonScreen />;
   if (health.error) return <div className="oj-error">{health.error}</div>;
   const data = health.data;
   if (!data) return null;
@@ -490,7 +490,7 @@ export function HealthRecordsTab({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (health.loading) return <Spinner />;
+  if (health.loading) return <SkeletonScreen />;
   if (health.error) return <div className="oj-error">{health.error}</div>;
   const data = health.data;
   if (!data) return null;
@@ -609,7 +609,7 @@ export function HealthDocumentsTab({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (health.loading) return <Spinner />;
+  if (health.loading) return <SkeletonScreen />;
   if (health.error) return <div className="oj-error">{health.error}</div>;
   const documents = health.data?.documents ?? [];
 

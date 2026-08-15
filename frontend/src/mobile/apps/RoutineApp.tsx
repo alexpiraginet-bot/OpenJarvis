@@ -12,9 +12,9 @@ import {
   ProgressBar,
   Section,
   Sheet,
-  Spinner,
   useLoader,
 } from '../ui';
+import { SkeletonScreen } from '../Skeleton';
 
 export function HabitsToday({ onChanged }: { onChanged: () => void }) {
   const routine = useLoader(fetchRoutineSummary);
@@ -36,7 +36,7 @@ export function HabitsToday({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (routine.loading) return <Spinner />;
+  if (routine.loading) return <SkeletonScreen />;
   if (routine.error) return <div className="oj-error">{routine.error}</div>;
 
   const habits = routine.data?.habits ?? [];
@@ -116,7 +116,7 @@ export function ManageHabits({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (routine.loading) return <Spinner />;
+  if (routine.loading) return <SkeletonScreen />;
   const habits = routine.data?.habits ?? [];
   const best = [...habits].sort((a, b) => b.streak - a.streak)[0];
 

@@ -40,11 +40,11 @@ import {
   Row,
   Section,
   Sheet,
-  Spinner,
   Stat,
   todayIso,
   useLoader,
 } from '../ui';
+import { SkeletonRows, SkeletonScreen } from '../Skeleton';
 
 const CATEGORIES = [
   'mercado',
@@ -233,7 +233,7 @@ export function FinancialDocumentsTab({
 
       <Section title="Documentos recentes">
         {documents.loading ? (
-          <Spinner />
+          <SkeletonRows count={2} />
         ) : (documents.data?.documents.length ?? 0) === 0 ? (
           <Empty>Nenhum documento analisado.</Empty>
         ) : (
@@ -256,7 +256,7 @@ export function FinancialDocumentsTab({
 export function FinanceOverview({ currency }: { currency: string }) {
   const { data, error, loading } = useLoader(fetchFinanceSummary);
 
-  if (loading) return <Spinner />;
+  if (loading) return <SkeletonScreen />;
   if (error) return <div className="oj-error">{error}</div>;
   if (!data) return null;
 
@@ -401,7 +401,7 @@ export function BillsTab({
     }
   }
 
-  if (bills.loading) return <Spinner />;
+  if (bills.loading) return <SkeletonScreen />;
 
   return (
     <>
@@ -540,7 +540,7 @@ export function TransactionsTab({
     }
   }
 
-  if (transactions.loading) return <Spinner />;
+  if (transactions.loading) return <SkeletonScreen />;
   const records = transactions.data?.records ?? [];
 
   return (
@@ -607,7 +607,7 @@ export function GoalsTab({ currency }: { currency: string }) {
   const goals = useLoader(() => listRecords<Goal>('goals', { limit: 50 }));
   const accounts = useLoader(listAccounts);
 
-  if (goals.loading) return <Spinner />;
+  if (goals.loading) return <SkeletonScreen />;
   const records = goals.data?.records ?? [];
   const accountRecords: Account[] = accounts.data?.records ?? [];
 

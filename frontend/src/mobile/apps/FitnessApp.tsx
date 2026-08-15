@@ -44,11 +44,11 @@ import {
   Row,
   Section,
   Sheet,
-  Spinner,
   Stat,
   todayIso,
   useLoader,
 } from '../ui';
+import { SkeletonScreen } from '../Skeleton';
 
 const SPORT_LABELS: Record<TrainingSport, string> = {
   running: 'Corrida',
@@ -245,7 +245,7 @@ function SessionExperience({
     }
   }
 
-  if (detail.loading) return <Spinner />;
+  if (detail.loading) return <SkeletonScreen />;
   if (detail.error) return <div className="oj-error">{detail.error}</div>;
   if (!detail.data) return null;
   const data: CoachSessionDetail = detail.data;
@@ -344,7 +344,7 @@ export function CoachToday({ onChanged }: { onChanged: () => void }) {
   const coach = useLoader(fetchCoachOverview);
   const [selected, setSelected] = useState<TrainingSession | null>(null);
 
-  if (coach.loading) return <Spinner />;
+  if (coach.loading) return <SkeletonScreen />;
   if (coach.error) return <div className="oj-error">{coach.error}</div>;
   if (!coach.data?.profile) {
     return (
@@ -395,7 +395,7 @@ export function CoachToday({ onChanged }: { onChanged: () => void }) {
 export function CoachPlan({ onChanged }: { onChanged: () => void }) {
   const coach = useLoader(fetchCoachOverview);
   const [selected, setSelected] = useState<TrainingSession | null>(null);
-  if (coach.loading) return <Spinner />;
+  if (coach.loading) return <SkeletonScreen />;
   if (coach.error) return <div className="oj-error">{coach.error}</div>;
   if (!coach.data?.active_plan) return <Empty>Gere seu plano na aba Perfil.</Empty>;
 
@@ -524,7 +524,7 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (coach.loading) return <Spinner />;
+  if (coach.loading) return <SkeletonScreen />;
   return (
     <>
       {error && <div className="oj-error">{error}</div>}
@@ -573,7 +573,7 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
 export function FitnessOverview() {
   const { data, error, loading } = useLoader(fetchFitnessSummary);
 
-  if (loading) return <Spinner />;
+  if (loading) return <SkeletonScreen />;
   if (error) return <div className="oj-error">{error}</div>;
   if (!data) return null;
 
@@ -697,7 +697,7 @@ export function WorkoutsTab({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (workouts.loading) return <Spinner />;
+  if (workouts.loading) return <SkeletonScreen />;
   const records = workouts.data?.records ?? [];
   const upcoming = records.filter((w) => !w.completed_at);
   const done = records.filter((w) => w.completed_at);
@@ -810,7 +810,7 @@ export function MeasurementsTab() {
     }
   }
 
-  if (measurements.loading) return <Spinner />;
+  if (measurements.loading) return <SkeletonScreen />;
   const records = measurements.data?.records ?? [];
 
   return (

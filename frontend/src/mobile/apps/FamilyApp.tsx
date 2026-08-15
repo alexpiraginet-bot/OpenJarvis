@@ -13,9 +13,9 @@ import {
   Row,
   Section,
   Sheet,
-  Spinner,
   useLoader,
 } from '../ui';
+import { SkeletonScreen } from '../Skeleton';
 
 /** "hoje" / "amanhã" / "em 5 dias" — how a person actually says it. */
 function whenLabel(daysAway: number): string {
@@ -27,7 +27,7 @@ function whenLabel(daysAway: number): string {
 export function UpcomingTab() {
   const upcoming = useLoader(fetchFamilySummary);
 
-  if (upcoming.loading) return <Spinner />;
+  if (upcoming.loading) return <SkeletonScreen />;
   if (upcoming.error) return <div className="oj-error">{upcoming.error}</div>;
 
   const events = upcoming.data?.upcoming ?? [];
@@ -96,7 +96,7 @@ export function PeopleTab({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  if (members.loading) return <Spinner />;
+  if (members.loading) return <SkeletonScreen />;
   const records = members.data?.records ?? [];
 
   return (
