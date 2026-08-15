@@ -525,6 +525,19 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
   }
 
   if (coach.loading) return <SkeletonScreen />;
+  // O formulário abaixo nasce dos defaults do useState e só é sobrescrito pelo
+  // useEffect quando o perfil chega. Se o loader falhou, esses defaults parecem
+  // um perfil preenchido — e "Salvar perfil" grava condicionamento geral, 3 dias
+  // e 45 minutos por cima do que o cliente realmente configurou. Não oferecer o
+  // formulário é a única saída que não arrisca o dado dele.
+  if (coach.error) {
+    return (
+      <div className="oj-error">
+        Não deu para carregar seu perfil de treino: {coach.error}. Recarregue
+        antes de editar — salvar agora sobrescreveria o que já está salvo.
+      </div>
+    );
+  }
   return (
     <>
       {error && <div className="oj-error">{error}</div>}

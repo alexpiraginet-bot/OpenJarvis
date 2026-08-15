@@ -72,6 +72,17 @@ export function setToken(token: string): void {
   }
 }
 
+/**
+ * Teto para qualquer chamada ao Life API.
+ *
+ * Um `fetch` sem sinal nunca desiste sozinho: numa rede de celular que engasga
+ * — elevador, metrô, troca de torre — a promessa fica pendente e a tela fica
+ * em carregamento para sempre, sem erro para mostrar e sem caminho de volta.
+ * Vinte segundos é folgado para as rotas mais pesadas (análise de documento,
+ * prescrição de plano) e ainda assim finito.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -80,7 +91,40 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`/v1/life${path}`, { ...init, headers });
+  // AbortController em vez de AbortSignal.any/timeout: o Safari do iPhone só
+  // ganhou os dois no 17.4, e este app roda como PWA em telefone de cliente.
+  const controller = new AbortController();
+  const caller = init.signal;
+  const relayAbort = () => controller.abort();
+  if (caller) {
+    if (caller.aborted) controller.abort();
+    else caller.addEventListener('abort', relayAbort);
+  }
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(`/v1/life${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (exc) {
+    // Distinguir o nosso teto do cancelamento de quem chamou: só o primeiro é
+    // um problema que o usuário precisa ver.
+    if (controller.signal.aborted && !caller?.aborted) {
+      throw new LifeApiError(
+        'A conexão demorou demais. Verifique sua internet e tente de novo.',
+        0,
+        'timeout',
+      );
+    }
+    throw exc;
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener('abort', relayAbort);
+  }
+
   if (!response.ok) {
     let detail: unknown = `Erro ${response.status}`;
     try {
