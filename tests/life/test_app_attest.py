@@ -452,6 +452,24 @@ def test_registration_rotates_the_key_for_the_same_user_device(life, user):
     assert [row["key_id"] for row in rows] == [key_ids[-1]]
 
 
+def test_health_sync_challenge_is_an_explicit_supported_purpose(life, user):
+    store = AppAttestStore(
+        life,
+        team_id=TEAM_ID,
+        bundle_id=BUNDLE_ID,
+        environment="development",
+    )
+
+    challenge = store.issue_challenge(
+        user.id,
+        purpose="health_sync",
+        resource_id="health:" + "a" * 64,
+    )
+
+    assert challenge["challenge_id"]
+    assert challenge["challenge"]
+
+
 def test_production_rejects_a_development_attestation(life, user):
     """A TestFlight backend must never accept an App Attest sandbox key."""
     clock = datetime.now(timezone.utc)

@@ -185,4 +185,47 @@ describe('Native integration API', () => {
       }),
     );
   });
+
+  it('uploads an opaque attested Apple Health batch without a HealthKit credential', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          provider: 'apple_health',
+          synced: 2,
+          last_sync_at: '2026-08-14T12:00:00Z',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const { syncAppleHealth } = await import('./api');
+
+    await syncAppleHealth(
+      'ios-device-1234',
+      'eyJzYW1wbGVzIjpbXX0',
+      {
+        deviceId: 'ios-device-1234',
+        challengeId: 'challenge-health-sync-1234',
+        challenge: 'c'.repeat(43),
+        keyId: 'k'.repeat(43),
+        assertion: 'a'.repeat(86),
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/v1/life/integrations/apple_health/device-sync',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          device_id: 'ios-device-1234',
+          payload: 'eyJzYW1wbGVzIjpbXX0',
+          app_attest: {
+            challenge_id: 'challenge-health-sync-1234',
+            challenge: 'c'.repeat(43),
+            key_id: 'k'.repeat(43),
+            assertion: 'a'.repeat(86),
+          },
+        }),
+      }),
+    );
+  });
 });

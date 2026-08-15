@@ -7,6 +7,10 @@ de credencial ou de dados de outro tenant.
 
 from __future__ import annotations
 
+import base64
+import json
+from datetime import datetime, timezone
+
 import pytest
 
 pytest.importorskip("fastapi", reason="openjarvis[server] not installed")
@@ -19,6 +23,7 @@ from openjarvis.life.app_attest import AppAttestError
 from openjarvis.life.integration_sync import IntegrationItem
 from openjarvis.life.integrations import PROVIDERS, IntegrationsStore
 from openjarvis.life.oauth_providers import OAuthCredential
+from openjarvis.server.life_integrations_routes import _healthkit_resource_id
 from openjarvis.server.life_routes import create_life_router
 
 GOOGLE_ENV = {
@@ -162,6 +167,28 @@ def _app_attest_proof() -> dict:
         "key_id": "k" * 43,
         "assertion": "a" * 86,
     }
+
+
+def _healthkit_payload(samples: list[dict]) -> str:
+    raw = json.dumps(
+        {"samples": samples},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def test_healthkit_payload_digest_matches_the_native_ios_contract():
+    raw = (
+        b'{"samples":[{"kind":"steps","observed_at":'
+        b'"2026-08-14T12:00:00Z","sample_id":"steps:2026-08-14",'
+        b'"unit":"count","value":8421}]}'
+    )
+
+    assert _healthkit_resource_id("ios-device-1234", raw) == (
+        "health:4ab320d62432fe8067e63675cccf3e1a6e54d43e3423738a761278b96383177e"
+    )
 
 
 def _catalog_entry(client, auth, provider: str) -> dict:
@@ -465,20 +492,156 @@ def test_apple_calendar_device_grant_is_registered_for_the_current_tenant(client
     )
 
 
-def test_device_grant_rejects_health_until_a_healthkit_bridge_exists(client, auth):
+def test_apple_health_device_grant_requires_the_complete_healthkit_scope_set(
+    client, auth
+):
     response = client.post(
         "/v1/life/integrations/apple_health/device-grant",
         headers=auth,
         json={
-            "granted_scopes": ["steps.read"],
+            "granted_scopes": [
+                "steps.read",
+                "sleep.read",
+                "heart_rate.read",
+                "resting_heart_rate.read",
+                "active_energy.read",
+                "workouts.read",
+            ],
             "device_id": "ios-device-1234",
             "device_label": "iPhone",
+            "app_attest": _app_attest_proof(),
         },
     )
 
-    assert response.status_code == 409
-    assert "HealthKit" in response.json()["detail"]
-    assert _catalog_entry(client, auth, "apple_health")["connection"] is None
+    assert response.status_code == 201
+    connection = response.json()["connection"]
+    assert connection["status"] == "connected"
+    assert connection["has_credential"] is False
+    assert client.app_attest.calls[-1]["purpose"] == "device_grant"
+
+    partial = client.post(
+        "/v1/life/integrations/apple_health/device-grant",
+        headers=auth,
+        json={
+            "granted_scopes": ["steps.read"],
+            "device_id": "another-ios-device",
+            "device_label": "iPhone",
+            "app_attest": _app_attest_proof(),
+        },
+    )
+    assert partial.status_code == 409
+
+
+def test_apple_health_sync_is_attested_tenant_bound_and_idempotent(client, auth):
+    grant = client.post(
+        "/v1/life/integrations/apple_health/device-grant",
+        headers=auth,
+        json={
+            "granted_scopes": [
+                "steps.read",
+                "sleep.read",
+                "heart_rate.read",
+                "resting_heart_rate.read",
+                "active_energy.read",
+                "workouts.read",
+            ],
+            "device_id": "ios-device-1234",
+            "device_label": "iPhone",
+            "app_attest": _app_attest_proof(),
+        },
+    )
+    assert grant.status_code == 201
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    payload = {
+        "device_id": "ios-device-1234",
+        "payload": _healthkit_payload(
+            [
+                {
+                    "sample_id": "steps:2026-08-14",
+                    "kind": "steps",
+                    "value": 8421,
+                    "unit": "count",
+                    "observed_at": now,
+                },
+                {
+                    "sample_id": "heart-rate:sample-1",
+                    "kind": "heart_rate",
+                    "value": 72,
+                    "unit": "bpm",
+                    "observed_at": now,
+                },
+            ]
+        ),
+        "app_attest": _app_attest_proof(),
+    }
+
+    first = client.post(
+        "/v1/life/integrations/apple_health/device-sync",
+        headers=auth,
+        json=payload,
+    )
+    second = client.post(
+        "/v1/life/integrations/apple_health/device-sync",
+        headers=auth,
+        json=payload,
+    )
+
+    assert first.status_code == 200
+    assert first.json()["synced"] == 2
+    assert second.status_code == 200
+    assert second.json()["synced"] == 2
+    assert client.app_attest.calls[-1]["purpose"] == "health_sync"
+    me = client.get("/v1/life/me", headers=auth).json()
+    rows = client.life.store.list_records(
+        "health_observations", me["user"]["id"], limit=10
+    )
+    assert len(rows) == 2
+    assert {row["kind"] for row in rows} == {"steps", "heart_rate"}
+    assert {row["source"] for row in rows} == {"apple_health"}
+
+    other = _register(client, "bruna-health@exemplo.com")
+    assert (
+        client.post(
+            "/v1/life/integrations/apple_health/device-sync",
+            headers=other,
+            json=payload,
+        ).status_code
+        == 409
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "unit"),
+    [
+        ("steps", 10, "bpm"),
+        ("heart_rate", 500, "bpm"),
+        ("diagnosis", 1, "text"),
+    ],
+)
+def test_apple_health_sync_rejects_untrusted_or_implausible_samples(
+    client, auth, kind, value, unit
+):
+    response = client.post(
+        "/v1/life/integrations/apple_health/device-sync",
+        headers=auth,
+        json={
+            "device_id": "ios-device-1234",
+            "payload": _healthkit_payload(
+                [
+                    {
+                        "sample_id": "unsafe-sample",
+                        "kind": kind,
+                        "value": value,
+                        "unit": unit,
+                        "observed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ]
+            ),
+            "app_attest": _app_attest_proof(),
+        },
+    )
+
+    assert response.status_code in {409, 422}
 
 
 def test_calendar_device_grant_rejects_a_partial_or_forged_scope_set(client, auth):

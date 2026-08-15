@@ -297,7 +297,13 @@ class AppAttestStore:
         purpose: str,
         resource_id: str = "",
     ) -> Dict[str, str]:
-        if purpose not in {"attest", "device_grant", "native_action", "finance"}:
+        if purpose not in {
+            "attest",
+            "device_grant",
+            "native_action",
+            "finance",
+            "health_sync",
+        }:
             raise AppAttestError("Unknown App Attest challenge purpose")
         challenge_id = secrets.token_urlsafe(24)
         challenge = _b64url(secrets.token_bytes(32))

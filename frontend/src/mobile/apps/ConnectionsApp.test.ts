@@ -170,23 +170,28 @@ describe('presentProvider', () => {
     );
   });
 
-  it('Apple Health continua indisponivel enquanto nao existe bridge HealthKit', () => {
+  it('Apple Health oferece a autorização nativa do HealthKit no iPhone', () => {
     const view = presentProvider(
       provider({ id: 'apple_health', availability: 'device_only' }),
       NOW,
     );
-    expect(view.statusLabel).toBe('Ainda não disponível');
-    expect(view.detail).toContain('HealthKit');
-    expect(view.cta).toBe('none');
+    expect(view.statusLabel).toBe('No iPhone');
+    expect(view.detail).toContain('Apple Health');
+    expect(view.cta).toBe('device');
+    expect(view.ctaLabel).toBe('Autorizar Apple Health');
   });
 
-  it('dependência externa aparece sem botão e sem promessa falsa', () => {
+  it('WhatsApp configurado usa a ativação própria, sem abrir um OAuth inexistente', () => {
     const view = presentProvider(
-      provider({ id: 'whatsapp', availability: 'coming_soon' }),
+      provider({
+        id: 'whatsapp',
+        auth: { kind: 'none', pkce: false },
+        availability: 'available',
+      }),
       NOW,
     );
-    expect(view.statusLabel).toBe('Requer parceiro');
-    expect(view.detail).toContain('provedor homologado');
+    expect(view.statusLabel).toBe('Disponível');
+    expect(view.detail).toContain('Abra para vincular');
     expect(view.cta).toBe('none');
     expect(view.active).toBe(false);
   });
@@ -211,11 +216,12 @@ describe('provider synchronization controls', () => {
     expect(
       canSyncProvider(
         provider({
+          id: 'apple_health',
           auth: { kind: 'device', pkce: false },
           connection: connection({ has_credential: false }),
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       canSyncProvider(provider({ connection: connection({ status: 'expired' }) })),
     ).toBe(false);

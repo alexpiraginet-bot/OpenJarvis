@@ -76,6 +76,17 @@ _BASE_URL_ENV = "OPENJARVIS_LIFE_PUBLIC_BASE_URL"
 #: falhar fechado antes de mandar o usuário a uma consent screen sem retorno.
 OAUTH_CALLBACK_IMPLEMENTED = True
 
+APPLE_HEALTH_SCOPES = frozenset(
+    {
+        "steps.read",
+        "sleep.read",
+        "heart_rate.read",
+        "resting_heart_rate.read",
+        "active_energy.read",
+        "workouts.read",
+    }
+)
+
 _CALLBACK_PENDING_PREREQUISITE = (
     "Callback OAuth do servidor ainda não publicado (próxima fase deste hub)"
 )
@@ -110,8 +121,10 @@ class IntegrationAuthError(IntegrationsError):
 class ProviderSpec:
     """Um provedor curado e a verdade sobre o que ele exige.
 
-    ``env_vars`` é ordenada: o primeiro nome é sempre o client_id (é o único
+    Para OAuth, ``env_vars`` é ordenada e começa pelo client_id (é o único
     valor que aparece na URL de autorização; o segredo jamais sai do ambiente).
+    Provedores com ativação própria, como WhatsApp, listam todos os gates do
+    servidor que precisam existir antes de o catálogo oferecer o vínculo.
     ``capabilities`` e ``prerequisites`` são frases humanas em pt-BR — é o que
     o app mostra, então precisam ser verdadeiras, não aspiracionais.
     """
@@ -296,7 +309,15 @@ PROVIDERS: Dict[str, ProviderSpec] = {
             scopes=(),
             auth_kind="none",
             pkce=False,
-            stage="coming_soon",
+            stage="available",
+            env_vars=(
+                "WHATSAPP_ACCESS_TOKEN",
+                "WHATSAPP_PHONE_NUMBER_ID",
+                "WHATSAPP_VERIFY_TOKEN",
+                "WHATSAPP_APP_SECRET",
+                "OPENJARVIS_LIFE_CHANNEL_PEPPER",
+                "CRON_SECRET",
+            ),
             prerequisites=(
                 "Conta WhatsApp Business (Cloud API da Meta) com número dedicado",
                 "Webhook público configurado no app da Meta",
@@ -1020,6 +1041,70 @@ class IntegrationsStore:
             )
         self._db.commit()
         return cur.rowcount > 0
+
+    def ingest_healthkit_samples(
+        self,
+        user_id: str,
+        *,
+        device_id: str,
+        samples: Sequence[Mapping[str, Any]],
+    ) -> int:
+        """Upsert a bounded, attested HealthKit projection for one tenant.
+
+        ``sample_id`` is an opaque native identifier. It is hashed together
+        with ``user_id`` so retries update the same observation without
+        exposing HealthKit identifiers or allowing one tenant to collide with
+        another. Clinical documents and diagnoses are deliberately outside
+        this ingestion contract.
+        """
+        if not self.is_device_connected(
+            user_id,
+            "apple_health",
+            device_id,
+            required_scopes=APPLE_HEALTH_SCOPES,
+        ):
+            raise IntegrationsError(
+                "Este iPhone não possui uma concessão Apple Health ativa."
+            )
+        now_iso = self._now().isoformat()
+        with self._db.transaction():
+            for sample in samples:
+                sample_id = str(sample["sample_id"])
+                record_id = (
+                    "hk_"
+                    + hashlib.sha256(
+                        f"{user_id}\0{sample_id}".encode("utf-8")
+                    ).hexdigest()
+                )
+                self._db.execute(
+                    "INSERT INTO health_observations"
+                    " (id, user_id, kind, value, unit, observed_at, source,"
+                    " notes, created_at) VALUES (?, ?, ?, ?, ?, ?,"
+                    " 'apple_health', '', ?)"
+                    " ON CONFLICT(id) DO UPDATE SET"
+                    " kind = excluded.kind,"
+                    " value = excluded.value,"
+                    " unit = excluded.unit,"
+                    " observed_at = excluded.observed_at"
+                    " WHERE health_observations.user_id = excluded.user_id"
+                    " AND health_observations.source = 'apple_health'",
+                    (
+                        record_id,
+                        user_id,
+                        sample["kind"],
+                        sample["value"],
+                        sample["unit"],
+                        sample["observed_at"],
+                        now_iso,
+                    ),
+                )
+            self.record_sync(
+                user_id,
+                "apple_health",
+                ok=True,
+                synced_at=now_iso,
+            )
+        return len(samples)
 
     def record_auth_error(
         self,

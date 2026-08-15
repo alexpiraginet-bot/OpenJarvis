@@ -47,6 +47,28 @@ describe('health manual correction helpers', () => {
       }),
     ).toEqual({ title: 'Peso', detail: '78,5 kg · 13/08' });
   });
+
+  it('names every Apple Health metric in plain pt-BR', () => {
+    const labels = [
+      ['steps', 'Passos'],
+      ['sleep_hours', 'Sono'],
+      ['heart_rate', 'Frequência cardíaca'],
+      ['resting_heart_rate', 'Frequência cardíaca em repouso'],
+      ['active_energy', 'Energia ativa'],
+      ['workout_minutes', 'Minutos de treino'],
+    ];
+
+    for (const [kind, title] of labels) {
+      expect(
+        formatHealthObservation({
+          kind,
+          value: 10,
+          unit: 'un',
+          observed_at: '2026-08-14T08:30:00-03:00',
+        }).title,
+      ).toBe(title);
+    }
+  });
 });
 
 describe('HealthSafetyNotice', () => {

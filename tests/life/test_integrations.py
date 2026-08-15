@@ -50,6 +50,16 @@ STRAVA_ENV = {
     "OPENJARVIS_LIFE_PUBLIC_BASE_URL": "https://life.exemplo.com",
 }
 
+WHATSAPP_ENV = {
+    "WHATSAPP_ACCESS_TOKEN": "encrypted-at-runtime",
+    "WHATSAPP_PHONE_NUMBER_ID": "1234567890",
+    "WHATSAPP_VERIFY_TOKEN": "verify-at-runtime",
+    "WHATSAPP_APP_SECRET": "app-secret-at-runtime",
+    "OPENJARVIS_LIFE_CHANNEL_PEPPER": "pepper-at-runtime",
+    "CRON_SECRET": "cron-at-runtime",
+    "OPENJARVIS_LIFE_PUBLIC_BASE_URL": "https://life.exemplo.com",
+}
+
 ALL_ENV_VARS = sorted(
     {name for spec in PROVIDERS.values() for name in spec.env_vars}
     | {"OPENJARVIS_LIFE_PUBLIC_BASE_URL"}
@@ -217,10 +227,25 @@ def test_availability_reflects_configuration(store, user, monkeypatch):
         _provider_entry(store, user.id, "apple_calendar")["availability"]
         == "device_only"
     )
-    assert _provider_entry(store, user.id, "whatsapp")["availability"] == "coming_soon"
+    assert _provider_entry(store, user.id, "whatsapp")["availability"] == "needs_setup"
     assert (
         _provider_entry(store, user.id, "open_finance")["availability"] == "coming_soon"
     )
+
+
+def test_whatsapp_becomes_available_only_with_the_complete_official_stack(
+    store, user, monkeypatch
+):
+    missing = _provider_entry(store, user.id, "whatsapp")
+    assert missing["availability"] == "needs_setup"
+    assert set(missing["missing_config"]) == set(WHATSAPP_ENV)
+
+    for name, value in WHATSAPP_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    ready = _provider_entry(store, user.id, "whatsapp")
+    assert ready["availability"] == "available"
+    assert ready["missing_config"] == []
 
 
 def test_oauth_stays_needs_setup_until_the_callback_ships(store, user, monkeypatch):

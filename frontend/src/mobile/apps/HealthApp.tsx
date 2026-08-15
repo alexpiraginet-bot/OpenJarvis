@@ -75,6 +75,11 @@ const OBSERVATION_LABELS: Record<string, string> = {
   blood_pressure: 'Pressão arterial',
   frequencia_cardiaca: 'Frequência cardíaca',
   heart_rate: 'Frequência cardíaca',
+  resting_heart_rate: 'Frequência cardíaca em repouso',
+  steps: 'Passos',
+  sleep_hours: 'Sono',
+  active_energy: 'Energia ativa',
+  workout_minutes: 'Minutos de treino',
   temperatura: 'Temperatura',
 };
 

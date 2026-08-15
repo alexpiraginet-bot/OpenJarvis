@@ -868,4 +868,131 @@ final class JarvisConfigurationTests: XCTestCase {
         XCTAssertEqual(biometricCalls, 1)
         XCTAssertEqual(received["status"] as? String, "ready")
     }
+
+    @MainActor
+    func testNativeHealthPermissionEmitsTheReadOnlyHealthKitScopes() async {
+        var received: [String: Any] = [:]
+        let controller = NativeIntegrationController(
+            requestCalendarAccess: { true },
+            hasFullCalendarAccess: { true },
+            requestHealthAccess: { true },
+            healthDataAvailable: { true },
+            deviceID: { "ios-device-1234" },
+            deviceLabel: { "iPhone" },
+            send: { received = $0 }
+        )
+
+        await controller.requestHealthPermission(
+            ["provider": "apple_health"],
+            requestID: "request-health-grant-1"
+        )
+
+        XCTAssertEqual(received["type"] as? String, "deviceGrant")
+        XCTAssertEqual(received["status"] as? String, "granted")
+        XCTAssertEqual(received["provider"] as? String, "apple_health")
+        XCTAssertEqual(received["deviceId"] as? String, "ios-device-1234")
+        XCTAssertEqual(
+            received["grantedScopes"] as? [String],
+            [
+                "steps.read",
+                "sleep.read",
+                "heart_rate.read",
+                "resting_heart_rate.read",
+                "active_energy.read",
+                "workouts.read",
+            ]
+        )
+    }
+
+    @MainActor
+    func testNativeHealthReadReturnsABoundedOpaquePayloadAndDigest() async {
+        var received: [String: Any] = [:]
+        let samples = [
+            NativeHealthSample(
+                sampleID: "steps:2026-08-14",
+                kind: "steps",
+                value: 8421,
+                unit: "count",
+                observedAt: "2026-08-14T12:00:00Z"
+            )
+        ]
+        let controller = NativeIntegrationController(
+            requestCalendarAccess: { true },
+            hasFullCalendarAccess: { true },
+            requestHealthAccess: { true },
+            healthDataAvailable: { true },
+            readHealthData: { samples },
+            deviceID: { "ios-device-1234" },
+            deviceLabel: { "iPhone" },
+            send: { received = $0 }
+        )
+
+        await controller.sendHealthData(requestID: "request-health-read-1")
+
+        XCTAssertEqual(received["type"] as? String, "healthData")
+        XCTAssertEqual(received["status"] as? String, "ready")
+        XCTAssertEqual(received["sampleCount"] as? Int, 1)
+        XCTAssertEqual(received["deviceId"] as? String, "ios-device-1234")
+        XCTAssertTrue((received["resourceId"] as? String)?.hasPrefix("health:") == true)
+        let encoded = received["payload"] as? String ?? ""
+        let raw = NativeIntegrationController.base64URLDataForTesting(encoded)
+        XCTAssertEqual(
+            String(data: raw ?? Data(), encoding: .utf8),
+            "{\"samples\":[{\"kind\":\"steps\",\"observed_at\":\"2026-08-14T12:00:00Z\",\"sample_id\":\"steps:2026-08-14\",\"unit\":\"count\",\"value\":8421}]}"
+        )
+        XCTAssertEqual(
+            received["resourceId"] as? String,
+            "health:4ab320d62432fe8067e63675cccf3e1a6e54d43e3423738a761278b96383177e"
+        )
+        let object = try? JSONSerialization.jsonObject(with: raw ?? Data())
+        let body = object as? [String: Any]
+        XCTAssertEqual((body?["samples"] as? [[String: Any]])?.count, 1)
+    }
+
+    @MainActor
+    func testHealthSyncAssertionRejectsAResourceNotProducedByHealthKit() async {
+        var received: [String: Any] = [:]
+        var assertionCalls = 0
+        let controller = NativeIntegrationController(
+            requestAssertion: { _, _ in
+                assertionCalls += 1
+                return Data(repeating: 1, count: 64)
+            },
+            requestCalendarAccess: { true },
+            hasFullCalendarAccess: { true },
+            requestHealthAccess: { true },
+            healthDataAvailable: { true },
+            readHealthData: { [] },
+            deviceID: { "ios-device-1234" },
+            deviceLabel: { "iPhone" },
+            send: { received = $0 }
+        )
+        await controller.sendHealthData(requestID: "request-health-read-2")
+        let body = try! JSONSerialization.data(withJSONObject: [
+            "challenge": "c",
+            "confirmation_method": "",
+            "device_id": "ios-device-1234",
+            "purpose": "health_sync",
+            "resource_id": "health:\(String(repeating: "f", count: 64))",
+            "user_id": String(repeating: "a", count: 32),
+        ], options: [.sortedKeys])
+        let clientData = body.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        received = [:]
+
+        controller.handle([
+            "action": "assert",
+            "requestId": "request-health-assert-1",
+            "accountId": String(repeating: "a", count: 32),
+            "keyId": String(repeating: "k", count: 43),
+            "clientData": clientData,
+            "requireBiometric": false,
+        ])
+        for _ in 0..<100 where received.isEmpty { await Task.yield() }
+
+        XCTAssertEqual(assertionCalls, 0)
+        XCTAssertEqual(received["status"] as? String, "denied")
+    }
 }

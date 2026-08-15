@@ -9,6 +9,8 @@ import {
   requestNativeCalendarGrant,
   requestNativeCalendarSave,
   requestNativeDeviceIdentity,
+  requestNativeHealthBatch,
+  requestNativeHealthGrant,
   runFinanceMutation,
   type NativeBridgeHost,
 } from './nativeIntegrations';
@@ -171,6 +173,71 @@ describe('native iOS integration bridge', () => {
       deviceLabel: identity.deviceLabel,
     });
     expect(host.listenerCount).toBe(0);
+  });
+
+  it('requests HealthKit permission and accepts only the complete native grant', async () => {
+    const host = new FakeNativeHost();
+    const pending = requestNativeHealthGrant(host, 'request-health-grant-1');
+
+    expect(host.postMessage).toHaveBeenCalledWith({
+      action: 'requestPermission',
+      provider: 'apple_health',
+      requestId: 'request-health-grant-1',
+    });
+    host.emit({
+      type: 'deviceGrant',
+      status: 'granted',
+      provider: 'apple_health',
+      requestId: 'request-health-grant-1',
+      grantedScopes: [
+        'steps.read',
+        'sleep.read',
+        'heart_rate.read',
+        'resting_heart_rate.read',
+        'active_energy.read',
+        'workouts.read',
+      ],
+      ...identity,
+    });
+
+    await expect(pending).resolves.toEqual({
+      grantedScopes: [
+        'steps.read',
+        'sleep.read',
+        'heart_rate.read',
+        'resting_heart_rate.read',
+        'active_energy.read',
+        'workouts.read',
+      ],
+      deviceId: identity.deviceId,
+      deviceLabel: identity.deviceLabel,
+    });
+  });
+
+  it('returns the opaque native HealthKit batch bound to its digest', async () => {
+    const host = new FakeNativeHost();
+    const pending = requestNativeHealthBatch(host, 'request-health-read-1');
+
+    expect(host.postMessage).toHaveBeenCalledWith({
+      action: 'readHealthData',
+      requestId: 'request-health-read-1',
+    });
+    host.emit({
+      type: 'healthData',
+      status: 'ready',
+      requestId: 'request-health-read-1',
+      deviceId: identity.deviceId,
+      payload: 'eyJzYW1wbGVzIjpbXX0',
+      resourceId: `health:${'a'.repeat(64)}`,
+      sampleCount: 0,
+    });
+
+    await expect(pending).resolves.toEqual({
+      deviceId: identity.deviceId,
+      payload: 'eyJzYW1wbGVzIjpbXX0',
+      resourceId: `health:${'a'.repeat(64)}`,
+      sampleCount: 0,
+    });
   });
 
   it('signs attestation and assertion bytes without accepting another key', async () => {

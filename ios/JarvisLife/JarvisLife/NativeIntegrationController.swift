@@ -2,6 +2,7 @@ import CryptoKit
 import DeviceCheck
 import EventKit
 import Foundation
+import HealthKit
 import LocalAuthentication
 import UIKit
 
@@ -110,6 +111,26 @@ struct NativeCalendarReceipt: Codable, Equatable {
             "calendar_title": calendarTitle,
         ]
     }
+}
+
+struct NativeHealthSample: Codable, Equatable {
+    let sampleID: String
+    let kind: String
+    let value: Double
+    let unit: String
+    let observedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case sampleID = "sample_id"
+        case kind
+        case value
+        case unit
+        case observedAt = "observed_at"
+    }
+}
+
+private struct NativeHealthPayload: Codable {
+    let samples: [NativeHealthSample]
 }
 
 /// Small durable receipt index. EventKit remains authoritative; the cache only
@@ -277,6 +298,8 @@ final class NativeIntegrationController {
         String,
         NativeCalendarWrite
     ) throws -> NativeCalendarReceipt
+    typealias HealthAccessRequest = () async throws -> Bool
+    typealias HealthRead = () async throws -> [NativeHealthSample]
     typealias KeyInvalidation = (String) -> Void
 
     private let requestKey: KeyRequest
@@ -288,10 +311,14 @@ final class NativeIntegrationController {
     private let hasFullCalendarAccess: () -> Bool
     private let readCalendarEvents: CalendarRead
     private let saveCalendarEvent: CalendarSave
+    private let requestHealthAccess: HealthAccessRequest
+    private let healthDataAvailable: () -> Bool
+    private let readHealthData: HealthRead
     private let calendarReceiptCache: NativeCalendarReceiptCache
     private let deviceID: () -> String
     private let deviceLabel: () -> String
     private let send: ([String: Any]) -> Void
+    private var pendingHealthSyncResourceID: String?
 
     init(
         requestKey: @escaping KeyRequest = { _ in "test-key" },
@@ -305,6 +332,9 @@ final class NativeIntegrationController {
         saveCalendarEvent: @escaping CalendarSave = { _, _, _ in
             throw NativeIntegrationError.unavailable
         },
+        requestHealthAccess: @escaping HealthAccessRequest = { false },
+        healthDataAvailable: @escaping () -> Bool = { false },
+        readHealthData: @escaping HealthRead = { [] },
         calendarReceiptCache: NativeCalendarReceiptCache = NativeCalendarReceiptCache(),
         deviceID: @escaping () -> String,
         deviceLabel: @escaping () -> String,
@@ -319,6 +349,9 @@ final class NativeIntegrationController {
         self.hasFullCalendarAccess = hasFullCalendarAccess
         self.readCalendarEvents = readCalendarEvents
         self.saveCalendarEvent = saveCalendarEvent
+        self.requestHealthAccess = requestHealthAccess
+        self.healthDataAvailable = healthDataAvailable
+        self.readHealthData = readHealthData
         self.calendarReceiptCache = calendarReceiptCache
         self.deviceID = deviceID
         self.deviceLabel = deviceLabel
@@ -327,6 +360,7 @@ final class NativeIntegrationController {
 
     convenience init(send: @escaping ([String: Any]) -> Void) {
         let eventStore = EKEventStore()
+        let healthStore = HKHealthStore()
         let appAttest = DCAppAttestService.shared
         self.init(
             requestKey: { accountID in
@@ -433,6 +467,32 @@ final class NativeIntegrationController {
                 }
                 return Self.calendarReceipt(event, write: write, identifier: identifier)
             },
+            requestHealthAccess: {
+                guard HKHealthStore.isHealthDataAvailable() else {
+                    throw NativeIntegrationError.unavailable
+                }
+                return try await withCheckedThrowingContinuation { continuation in
+                    healthStore.requestAuthorization(
+                        toShare: [],
+                        read: Self.healthReadTypes()
+                    ) { granted, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume(returning: granted)
+                        }
+                    }
+                }
+            },
+            healthDataAvailable: {
+                HKHealthStore.isHealthDataAvailable()
+            },
+            readHealthData: {
+                guard HKHealthStore.isHealthDataAvailable() else {
+                    throw NativeIntegrationError.unavailable
+                }
+                return try await Self.readHealthSamples(from: healthStore)
+            },
             deviceID: { NativeDeviceIdentity.stableID() },
             deviceLabel: { UIDevice.current.model },
             send: send
@@ -458,9 +518,15 @@ final class NativeIntegrationController {
             case "assert":
                 await sendAssertion(payload, requestID: requestID)
             case "requestPermission":
-                await requestCalendarPermission(payload, requestID: requestID)
+                if payload["provider"] as? String == "apple_health" {
+                    await requestHealthPermission(payload, requestID: requestID)
+                } else {
+                    await requestCalendarPermission(payload, requestID: requestID)
+                }
             case "readCalendarEvents":
                 sendCalendarEvents(requestID: requestID)
+            case "readHealthData":
+                await sendHealthData(requestID: requestID)
             case "createCalendarEvent":
                 createCalendarEvent(payload, requestID: requestID)
             case "clearCalendarReceipts":
@@ -575,14 +641,21 @@ final class NativeIntegrationController {
             return
         }
         do {
-            let purpose = Self.assertionPurpose(clientData)
-            guard purpose != nil else {
+            guard let context = Self.assertionContext(clientData) else {
                 throw NativeIntegrationError.invalidPayload
+            }
+            if context.purpose == "health_sync" {
+                guard pendingHealthSyncResourceID == context.resourceID else {
+                    throw NativeIntegrationError.invalidPayload
+                }
             }
             // JavaScript is not a trusted authority for local presence. A
             // finance assertion always requires Face ID even if a compromised
             // page explicitly sends requireBiometric=false.
-            if purpose == "finance" || payload["requireBiometric"] as? Bool == true {
+            if
+                context.purpose == "finance"
+                || payload["requireBiometric"] as? Bool == true
+            {
                 try await requestBiometric()
             }
             let result = try await assertionWithNetworkRetry(
@@ -596,6 +669,9 @@ final class NativeIntegrationController {
                 "keyId": keyID,
                 "assertion": Self.base64URL(result),
             ])
+            if context.purpose == "health_sync" {
+                pendingHealthSyncResourceID = nil
+            }
         } catch {
             if Self.isAppAttestError(error, .invalidKey) {
                 invalidateAppAttestKey(accountID)
@@ -651,6 +727,86 @@ final class NativeIntegrationController {
                 requestID: requestID,
                 provider: provider,
                 message: "Acesso ao Calendário negado. Libere em Ajustes para conectar."
+            )
+        }
+    }
+
+    @MainActor
+    func requestHealthPermission(_ payload: [String: Any], requestID: String) async {
+        let provider = payload["provider"] as? String ?? ""
+        guard provider == "apple_health", healthDataAvailable() else {
+            sendFailure(
+                type: "deviceGrant",
+                status: "unavailable",
+                requestID: requestID,
+                provider: provider,
+                message: "O Apple Health não está disponível neste aparelho."
+            )
+            return
+        }
+        do {
+            // HealthKit intentionally does not reveal which read types the
+            // user denied. A successful result means the official consent
+            // sheet completed; a later empty read still fails honestly as
+            // zero imported samples rather than claiming data exists.
+            guard try await requestHealthAccess() else {
+                throw NativeIntegrationError.denied
+            }
+            send([
+                "type": "deviceGrant",
+                "status": "granted",
+                "provider": provider,
+                "requestId": requestID,
+                "grantedScopes": Self.healthScopeNames,
+                "deviceId": deviceID(),
+                "deviceLabel": deviceLabel(),
+            ])
+        } catch {
+            sendFailure(
+                type: "deviceGrant",
+                status: "denied",
+                requestID: requestID,
+                provider: provider,
+                message: "Acesso ao Apple Health não concluído. Libere em Ajustes > Saúde."
+            )
+        }
+    }
+
+    @MainActor
+    func sendHealthData(requestID: String) async {
+        do {
+            guard healthDataAvailable() else {
+                throw NativeIntegrationError.unavailable
+            }
+            let samples = Array(try await readHealthData().prefix(128))
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            let rawPayload = try encoder.encode(NativeHealthPayload(samples: samples))
+            guard rawPayload.count <= 256_000 else {
+                throw NativeIntegrationError.invalidPayload
+            }
+            let currentDeviceID = deviceID()
+            let resourceID = Self.healthResourceID(
+                deviceID: currentDeviceID,
+                rawPayload: rawPayload
+            )
+            pendingHealthSyncResourceID = resourceID
+            send([
+                "type": "healthData",
+                "status": "ready",
+                "requestId": requestID,
+                "deviceId": currentDeviceID,
+                "payload": Self.base64URL(rawPayload),
+                "resourceId": resourceID,
+                "sampleCount": samples.count,
+            ])
+        } catch {
+            pendingHealthSyncResourceID = nil
+            sendFailure(
+                type: "healthData",
+                status: "error",
+                requestID: requestID,
+                message: "Não foi possível ler os dados autorizados no Apple Health."
             )
         }
     }
@@ -865,6 +1021,326 @@ final class NativeIntegrationController {
         return (start, end)
     }
 
+    static let healthScopeNames = [
+        "steps.read",
+        "sleep.read",
+        "heart_rate.read",
+        "resting_heart_rate.read",
+        "active_energy.read",
+        "workouts.read",
+    ]
+
+    private static func healthReadTypes() -> Set<HKObjectType> {
+        var types = Set<HKObjectType>()
+        [
+            HKQuantityTypeIdentifier.stepCount,
+            .heartRate,
+            .restingHeartRate,
+            .activeEnergyBurned,
+        ].compactMap { HKObjectType.quantityType(forIdentifier: $0) }
+            .forEach { types.insert($0) }
+        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
+            types.insert(sleep)
+        }
+        types.insert(HKObjectType.workoutType())
+        return types
+    }
+
+    private static func readHealthSamples(
+        from store: HKHealthStore,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) async throws -> [NativeHealthSample] {
+        guard
+            let stepsType = HKObjectType.quantityType(forIdentifier: .stepCount),
+            let heartType = HKObjectType.quantityType(forIdentifier: .heartRate),
+            let restingType = HKObjectType.quantityType(
+                forIdentifier: .restingHeartRate
+            ),
+            let energyType = HKObjectType.quantityType(
+                forIdentifier: .activeEnergyBurned
+            ),
+            let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis)
+        else {
+            throw NativeIntegrationError.unavailable
+        }
+        let start = calendar.date(byAdding: .day, value: -30, to: now)
+            ?? now.addingTimeInterval(-30 * 24 * 60 * 60)
+        async let steps = dailyQuantitySamples(
+            store: store,
+            type: stepsType,
+            unit: .count(),
+            kind: "steps",
+            outputUnit: "count",
+            start: start,
+            end: now,
+            calendar: calendar
+        )
+        async let energy = dailyQuantitySamples(
+            store: store,
+            type: energyType,
+            unit: .kilocalorie(),
+            kind: "active_energy",
+            outputUnit: "kcal",
+            start: start,
+            end: now,
+            calendar: calendar
+        )
+        async let sleep = dailySleepSamples(
+            store: store,
+            type: sleepType,
+            start: start,
+            end: now,
+            calendar: calendar
+        )
+        async let heart = latestQuantitySample(
+            store: store,
+            type: heartType,
+            unit: .count().unitDivided(by: .minute()),
+            kind: "heart_rate",
+            outputUnit: "bpm",
+            start: start,
+            end: now
+        )
+        async let resting = latestQuantitySample(
+            store: store,
+            type: restingType,
+            unit: .count().unitDivided(by: .minute()),
+            kind: "resting_heart_rate",
+            outputUnit: "bpm",
+            start: start,
+            end: now
+        )
+        async let workouts = dailyWorkoutSamples(
+            store: store,
+            start: start,
+            end: now,
+            calendar: calendar
+        )
+        let result = try await (
+            steps + energy + sleep + heart + resting + workouts
+        )
+        return result.sorted { $0.observedAt > $1.observedAt }
+    }
+
+    private static func dailyQuantitySamples(
+        store: HKHealthStore,
+        type: HKQuantityType,
+        unit: HKUnit,
+        kind: String,
+        outputUnit: String,
+        start: Date,
+        end: Date,
+        calendar: Calendar
+    ) async throws -> [NativeHealthSample] {
+        let predicate = HKQuery.predicateForSamples(
+            withStart: start,
+            end: end,
+            options: .strictStartDate
+        )
+        let anchor = calendar.startOfDay(for: start)
+        let statistics = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<[HKStatistics], Error>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: type,
+                quantitySamplePredicate: predicate,
+                options: .cumulativeSum,
+                anchorDate: anchor,
+                intervalComponents: DateComponents(day: 1)
+            )
+            query.initialResultsHandler = { _, collection, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                var values: [HKStatistics] = []
+                collection?.enumerateStatistics(from: start, to: end) {
+                    statistic, _ in values.append(statistic)
+                }
+                continuation.resume(returning: values)
+            }
+            store.execute(query)
+        }
+        return statistics.compactMap { statistic in
+            guard let sum = statistic.sumQuantity() else { return nil }
+            let value = rounded(sum.doubleValue(for: unit), places: 3)
+            guard value > 0 else { return nil }
+            return NativeHealthSample(
+                sampleID: "\(kind):\(dayKey(statistic.startDate, calendar: calendar))",
+                kind: kind,
+                value: value,
+                unit: outputUnit,
+                observedAt: iso8601(min(statistic.endDate, end))
+            )
+        }
+    }
+
+    private static func dailySleepSamples(
+        store: HKHealthStore,
+        type: HKCategoryType,
+        start: Date,
+        end: Date,
+        calendar: Calendar
+    ) async throws -> [NativeHealthSample] {
+        let samples = try await fetchSamples(
+            store: store,
+            type: type,
+            start: start,
+            end: end,
+            limit: 500
+        )
+        var totals: [String: Double] = [:]
+        var latest: [String: Date] = [:]
+        for case let sample as HKCategorySample in samples {
+            if
+                sample.value == HKCategoryValueSleepAnalysis.inBed.rawValue
+                || sample.value == HKCategoryValueSleepAnalysis.awake.rawValue
+            {
+                continue
+            }
+            let day = dayKey(sample.startDate, calendar: calendar)
+            totals[day, default: 0] += sample.endDate.timeIntervalSince(
+                sample.startDate
+            ) / 3_600
+            latest[day] = max(latest[day] ?? sample.endDate, sample.endDate)
+        }
+        return totals.compactMap { day, total in
+            guard total > 0, let observedAt = latest[day] else { return nil }
+            return NativeHealthSample(
+                sampleID: "sleep_hours:\(day)",
+                kind: "sleep_hours",
+                value: rounded(min(total, 24), places: 3),
+                unit: "h",
+                observedAt: iso8601(observedAt)
+            )
+        }
+    }
+
+    private static func latestQuantitySample(
+        store: HKHealthStore,
+        type: HKQuantityType,
+        unit: HKUnit,
+        kind: String,
+        outputUnit: String,
+        start: Date,
+        end: Date
+    ) async throws -> [NativeHealthSample] {
+        let samples = try await fetchSamples(
+            store: store,
+            type: type,
+            start: start,
+            end: end,
+            limit: 1
+        )
+        guard let sample = samples.first as? HKQuantitySample else { return [] }
+        return [
+            NativeHealthSample(
+                sampleID: "\(kind):\(sample.uuid.uuidString.lowercased())",
+                kind: kind,
+                value: rounded(sample.quantity.doubleValue(for: unit), places: 3),
+                unit: outputUnit,
+                observedAt: iso8601(sample.endDate)
+            )
+        ]
+    }
+
+    private static func dailyWorkoutSamples(
+        store: HKHealthStore,
+        start: Date,
+        end: Date,
+        calendar: Calendar
+    ) async throws -> [NativeHealthSample] {
+        let samples = try await fetchSamples(
+            store: store,
+            type: HKObjectType.workoutType(),
+            start: start,
+            end: end,
+            limit: 500
+        )
+        var totals: [String: Double] = [:]
+        var latest: [String: Date] = [:]
+        for case let workout as HKWorkout in samples {
+            let day = dayKey(workout.startDate, calendar: calendar)
+            totals[day, default: 0] += workout.duration / 60
+            latest[day] = max(latest[day] ?? workout.endDate, workout.endDate)
+        }
+        return totals.compactMap { day, total in
+            guard total > 0, let observedAt = latest[day] else { return nil }
+            return NativeHealthSample(
+                sampleID: "workout_minutes:\(day)",
+                kind: "workout_minutes",
+                value: rounded(min(total, 1_440), places: 3),
+                unit: "min",
+                observedAt: iso8601(observedAt)
+            )
+        }
+    }
+
+    private static func fetchSamples(
+        store: HKHealthStore,
+        type: HKSampleType,
+        start: Date,
+        end: Date,
+        limit: Int
+    ) async throws -> [HKSample] {
+        let predicate = HKQuery.predicateForSamples(
+            withStart: start,
+            end: end,
+            options: .strictStartDate
+        )
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type,
+                predicate: predicate,
+                limit: limit,
+                sortDescriptors: [
+                    NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+                ]
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: samples ?? [])
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    private static func dayKey(_ date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    private static func rounded(_ value: Double, places: Int) -> Double {
+        let scale = pow(10, Double(places))
+        return (value * scale).rounded() / scale
+    }
+
+    private static func healthResourceID(
+        deviceID: String,
+        rawPayload: Data
+    ) -> String {
+        var sealed = Data("health-sync-v1\0".utf8)
+        sealed.append(Data(deviceID.utf8))
+        sealed.append(0)
+        sealed.append(rawPayload)
+        let digest = SHA256.hash(data: sealed)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "health:\(digest)"
+    }
+
     private static func calendarMarkerURL(accountID: String, proposalID: String) -> URL {
         let digest = SHA256.hash(data: Data("\(accountID):\(proposalID)".utf8))
             .map { String(format: "%02x", $0) }
@@ -952,16 +1428,30 @@ final class NativeIntegrationController {
             .replacingOccurrences(of: "=", with: "")
     }
 
+    static func base64URLDataForTesting(_ value: String) -> Data? {
+        base64URLData(value, maximum: 256_000)
+    }
+
     static func assertionPurpose(_ clientData: Data) -> String? {
+        assertionContext(clientData)?.purpose
+    }
+
+    private static func assertionContext(
+        _ clientData: Data
+    ) -> (purpose: String, resourceID: String)? {
         guard
             let object = try? JSONSerialization.jsonObject(with: clientData),
             let body = object as? [String: Any],
             let purpose = body["purpose"] as? String,
-            ["device_grant", "native_action", "finance"].contains(purpose)
+            ["device_grant", "native_action", "finance", "health_sync"].contains(
+                purpose
+            ),
+            let resourceID = body["resource_id"] as? String,
+            resourceID.count <= 128
         else {
             return nil
         }
-        return purpose
+        return (purpose, resourceID)
     }
 
     private static func claimToken(_ value: Any?) -> String? {

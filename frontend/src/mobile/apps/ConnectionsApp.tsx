@@ -42,6 +42,8 @@ import {
 import {
   clearCurrentAccountNativeCalendarReceiptCache,
   connectNativeCalendar,
+  connectNativeHealth,
+  syncNativeHealth,
 } from '../nativeIntegrations';
 import type {
   IntegrationProvider,
@@ -176,6 +178,18 @@ export function presentProvider(
       : '';
   switch (provider.availability) {
     case 'available':
+      if (provider.auth.kind === 'none') {
+        return {
+          statusLabel: revokedDetail ? 'Desconectada' : 'Disponível',
+          tone: 'accent',
+          cta: 'none',
+          ctaLabel: '',
+          detail:
+            revokedDetail ||
+            'Abra para vincular seu número com o código enviado pelo Jarvis.',
+          active: false,
+        };
+      }
       return {
         statusLabel: revokedDetail ? 'Desconectada' : 'Disponível',
         tone: 'accent',
@@ -194,13 +208,19 @@ export function presentProvider(
         active: false,
       };
     case 'device_only':
-      if (provider.id === 'apple_calendar') {
+      if (provider.id === 'apple_calendar' || provider.id === 'apple_health') {
         return {
           statusLabel: 'No iPhone',
           tone: 'accent',
           cta: 'device',
-          ctaLabel: 'Autorizar calendário',
-          detail: 'Disponível no app iOS; ainda não conectado neste aparelho.',
+          ctaLabel:
+            provider.id === 'apple_calendar'
+              ? 'Autorizar calendário'
+              : 'Autorizar Apple Health',
+          detail:
+            provider.id === 'apple_calendar'
+              ? 'Disponível no app iOS; ainda não conectado neste aparelho.'
+              : 'Disponível no app iOS; leia dados do iPhone e Apple Watch pelo Apple Health.',
           active: false,
         };
       }
@@ -294,9 +314,9 @@ export function showGenericDisconnect(provider: IntegrationProvider): boolean {
 
 export function canSyncProvider(provider: IntegrationProvider): boolean {
   return Boolean(
-    provider.auth.kind === 'oauth' &&
-      provider.connection?.status === 'connected' &&
-      provider.connection.has_credential,
+    provider.connection?.status === 'connected' &&
+      ((provider.auth.kind === 'oauth' && provider.connection.has_credential) ||
+        provider.id === 'apple_health'),
   );
 }
 
@@ -444,7 +464,17 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
     setNotice('');
     try {
       if (provider.auth.kind === 'device') {
-        await connectNativeCalendar(provider.id);
+        const result =
+          provider.id === 'apple_health'
+            ? await connectNativeHealth(provider.id)
+            : await connectNativeCalendar(provider.id);
+        if (provider.id === 'apple_health') {
+          setNotice(
+            result && result.synced === 1
+              ? 'Apple Health conectado e 1 medida importada.'
+              : `Apple Health conectado e ${result?.synced ?? 0} medidas importadas.`,
+          );
+        }
         overview.reload();
         onChanged?.();
         setBusy('');
@@ -469,7 +499,10 @@ export function ConnectionsTab({ onChanged }: { onChanged?: () => void }) {
     setError('');
     setNotice('');
     try {
-      const result = await syncIntegration(provider.id);
+      const result =
+        provider.id === 'apple_health'
+          ? await syncNativeHealth()
+          : await syncIntegration(provider.id);
       setNotice(
         result.synced === 1
           ? '1 item atualizado no cérebro do Jarvis.'
@@ -776,7 +809,7 @@ function ProviderDetail({
           <p className="oj-conn-note">
             {provider.id === 'apple_calendar'
               ? 'Toque em Autorizar calendário. O iPhone abre a tela oficial do sistema; o servidor registra apenas que esta instalação recebeu acesso, nunca uma credencial.'
-              : 'A integração HealthKit ainda não foi implementada neste build. Nenhum dado de saúde será marcado como conectado antes de existir uma ponte nativa real.'}
+              : 'Toque em Autorizar Apple Health. O iPhone mostra o consentimento oficial; o Jarvis importa apenas passos, sono, frequência cardíaca, energia ativa e minutos de treino, sem receber credencial do HealthKit.'}
           </p>
         </div>
       )}

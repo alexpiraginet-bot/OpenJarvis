@@ -6,6 +6,7 @@ import {
   registerDeviceAttestation,
   registerDeviceGrant,
   resolveNativeAction,
+  syncAppleHealth,
   LifeApiError,
   type AppAttestProof,
   type ConfirmationMethod,
@@ -52,6 +53,9 @@ interface NativeIntegrationEventDetail {
   assertion?: unknown;
   code?: unknown;
   events?: unknown;
+  payload?: unknown;
+  resourceId?: unknown;
+  sampleCount?: unknown;
   rotated?: unknown;
   receiptHmac?: unknown;
   event?: unknown;
@@ -72,6 +76,13 @@ interface NativeCalendarSave {
   event: NativeCalendarEventReceipt;
   keyId: string;
   assertion: string;
+}
+
+export interface NativeHealthBatch {
+  deviceId: string;
+  payload: string;
+  resourceId: string;
+  sampleCount: number;
 }
 
 export class NativeBridgeError extends Error {
@@ -304,6 +315,58 @@ export function requestNativeCalendarGrant(
   );
 }
 
+/** Ask HealthKit through the native iOS bridge and await its system grant. */
+export function requestNativeHealthGrant(
+  host: NativeBridgeHost | null = browserHost(),
+  requestId = newRequestId(),
+): Promise<NativeDeviceGrant> {
+  return nativeRequest(
+    { action: 'requestPermission', provider: 'apple_health' },
+    'deviceGrant',
+    parseGrant,
+    host,
+    requestId,
+  );
+}
+
+/** Read a bounded HealthKit batch already sealed to a native digest. */
+export function requestNativeHealthBatch(
+  host: NativeBridgeHost | null = browserHost(),
+  requestId = newRequestId(),
+): Promise<NativeHealthBatch> {
+  return nativeRequest(
+    { action: 'readHealthData' },
+    'healthData',
+    (detail) => {
+      const deviceId = nonEmptyString(detail.deviceId, 128);
+      const payload = nonEmptyString(detail.payload, 350_000);
+      const resourceId = nonEmptyString(detail.resourceId, 128);
+      const sampleCount = detail.sampleCount;
+      if (
+        !deviceId ||
+        deviceId.length < 8 ||
+        !payload ||
+        !/^[A-Za-z0-9_-]+$/.test(payload) ||
+        !resourceId ||
+        !/^health:[0-9a-f]{64}$/.test(resourceId) ||
+        !Number.isInteger(sampleCount) ||
+        (sampleCount as number) < 0 ||
+        (sampleCount as number) > 128
+      ) {
+        return null;
+      }
+      return {
+        deviceId,
+        payload,
+        resourceId,
+        sampleCount: sampleCount as number,
+      };
+    },
+    host,
+    requestId,
+  );
+}
+
 function parseCalendarContextEvent(value: unknown) {
   if (!value || typeof value !== 'object') return null;
   const event = value as Record<string, unknown>;
@@ -446,7 +509,7 @@ function isInvalidAppAttestKey(error: unknown): boolean {
 }
 
 export async function buildStrongAuthProof(
-  purpose: 'device_grant' | 'native_action' | 'finance',
+  purpose: 'device_grant' | 'native_action' | 'finance' | 'health_sync',
   resourceId: string,
   confirmationMethod: '' | ConfirmationMethod,
   requireBiometric: boolean,
@@ -569,6 +632,44 @@ export async function connectNativeCalendar(
     host,
   );
   await registerDeviceGrant(provider, grant, proof);
+}
+
+export async function syncNativeHealth(
+  host: NativeBridgeHost | null = browserHost(),
+): Promise<{ provider: string; synced: number; last_sync_at: string }> {
+  const batch = await requestNativeHealthBatch(host);
+  const identity = await ensureNativeDeviceAttestation(host);
+  if (batch.deviceId !== identity.deviceId) {
+    throw new Error('Os dados de saúde vieram de outra instalação do Jarvis.');
+  }
+  const proof = await buildStrongAuthProof(
+    'health_sync',
+    batch.resourceId,
+    '',
+    false,
+    host,
+  );
+  return syncAppleHealth(batch.deviceId, batch.payload, proof);
+}
+
+export async function connectNativeHealth(
+  provider = 'apple_health',
+  host: NativeBridgeHost | null = browserHost(),
+): Promise<{ provider: string; synced: number; last_sync_at: string }> {
+  const grant = await requestNativeHealthGrant(host);
+  const identity = await ensureNativeDeviceAttestation(host);
+  if (grant.deviceId !== identity.deviceId) {
+    throw new Error('A autorização veio de outra instalação do Jarvis.');
+  }
+  const proof = await buildStrongAuthProof(
+    'device_grant',
+    provider,
+    '',
+    false,
+    host,
+  );
+  await registerDeviceGrant(provider, grant, proof);
+  return syncNativeHealth(host);
 }
 
 export async function executeNativeCalendarProposal(

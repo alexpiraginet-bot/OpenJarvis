@@ -13,14 +13,19 @@ e fail-closed por construção.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import logging
+import math
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from openjarvis.life import LifeContext
 from openjarvis.life.app_attest import (
@@ -33,6 +38,7 @@ from openjarvis.life.integration_sync import (
     IntegrationSyncService,
 )
 from openjarvis.life.integrations import (
+    APPLE_HEALTH_SCOPES,
     PROVIDERS,
     CredentialVault,
     IntegrationAuthError,
@@ -47,6 +53,16 @@ from openjarvis.life.tenancy import User
 logger = logging.getLogger(__name__)
 _bearer = HTTPBearer(auto_error=False)
 _APPLE_CALENDAR_SCOPES = frozenset({"events.read", "events.write"})
+_HEALTHKIT_METRICS = {
+    "steps": ("count", 0.0, 200_000.0),
+    "sleep_hours": ("h", 0.0, 24.0),
+    "heart_rate": ("bpm", 20.0, 260.0),
+    "resting_heart_rate": ("bpm", 20.0, 220.0),
+    "active_energy": ("kcal", 0.0, 20_000.0),
+    "workout_minutes": ("min", 0.0, 1_440.0),
+}
+_HEALTHKIT_MAX_AGE = timedelta(days=31)
+_HEALTHKIT_MAX_FUTURE = timedelta(minutes=5)
 
 
 class DeviceGrantRequest(BaseModel):
@@ -73,7 +89,9 @@ class AppAttestChallengeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    purpose: Literal["attest", "device_grant", "native_action", "finance"]
+    purpose: Literal[
+        "attest", "device_grant", "native_action", "finance", "health_sync"
+    ]
     resource_id: str = Field(default="", max_length=128)
     device_id: str = Field(min_length=8, max_length=128)
     confirmation_method: Literal["", "explicit", "voice_explicit"] = ""
@@ -99,6 +117,74 @@ class AppAttestStatusRequest(BaseModel):
 
     device_id: str = Field(min_length=8, max_length=128)
     key_id: str = Field(min_length=32, max_length=128)
+
+
+class HealthKitSample(BaseModel):
+    """One bounded, non-clinical metric emitted by the native HealthKit bridge."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_id: str = Field(min_length=1, max_length=128)
+    kind: Literal[
+        "steps",
+        "sleep_hours",
+        "heart_rate",
+        "resting_heart_rate",
+        "active_energy",
+        "workout_minutes",
+    ]
+    value: float
+    unit: Literal["count", "h", "bpm", "kcal", "min"]
+    observed_at: datetime
+
+    @field_validator("observed_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("HealthKit timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def validate_metric(self) -> "HealthKitSample":
+        expected_unit, minimum, maximum = _HEALTHKIT_METRICS[self.kind]
+        if self.unit != expected_unit:
+            raise ValueError("HealthKit metric unit does not match its kind")
+        if not math.isfinite(self.value) or not minimum <= self.value <= maximum:
+            raise ValueError("HealthKit metric value is outside the accepted range")
+        return self
+
+
+class HealthKitPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    samples: List[HealthKitSample] = Field(max_length=128)
+
+
+class HealthKitSyncRequest(BaseModel):
+    """Opaque native payload plus the App Attest assertion bound to its digest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str = Field(min_length=8, max_length=128)
+    payload: str = Field(min_length=4, max_length=350_000, pattern=r"^[A-Za-z0-9_-]+$")
+    app_attest: AppAttestAssertionProof
+
+
+def _decode_healthkit_payload(encoded: str) -> bytes:
+    try:
+        raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("HealthKit payload is not valid base64url") from exc
+    if not raw or len(raw) > 256_000:
+        raise ValueError("HealthKit payload exceeds the accepted size")
+    return raw
+
+
+def _healthkit_resource_id(device_id: str, raw_payload: bytes) -> str:
+    digest = hashlib.sha256(
+        b"health-sync-v1\0" + device_id.encode("utf-8") + b"\0" + raw_payload
+    ).hexdigest()
+    return f"health:{digest}"
 
 
 def create_integrations_router(
@@ -274,28 +360,27 @@ def create_integrations_router(
         body: DeviceGrantRequest,
         user: User = Depends(current_user),
     ) -> Dict[str, Any]:
-        """Record EventKit access granted by this user's iPhone installation.
-
-        This endpoint is deliberately limited to Apple Calendar until a real
-        HealthKit bridge exists. An authenticated client cannot turn a future
-        device integration green by posting an aspirational payload.
-        """
+        """Record a native Apple grant proved by this iPhone installation."""
         if provider not in PROVIDERS:
             raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
-        if provider == "apple_health":
-            raise HTTPException(
-                status_code=409,
-                detail="A ponte nativa do HealthKit ainda não está disponível.",
-            )
-        if provider != "apple_calendar":
+        if provider not in {"apple_calendar", "apple_health"}:
             raise HTTPException(
                 status_code=409,
                 detail="Este provedor não usa autorização nativa do iPhone.",
             )
-        if set(body.granted_scopes) != _APPLE_CALENDAR_SCOPES:
+        required_scopes = (
+            _APPLE_CALENDAR_SCOPES
+            if provider == "apple_calendar"
+            else APPLE_HEALTH_SCOPES
+        )
+        if set(body.granted_scopes) != required_scopes:
             raise HTTPException(
                 status_code=409,
-                detail="O acesso completo ao Calendário não foi concedido.",
+                detail=(
+                    "O acesso completo ao Calendário não foi concedido."
+                    if provider == "apple_calendar"
+                    else "As leituras necessárias do Apple Health não foram concedidas."
+                ),
             )
         if body.app_attest is None:
             raise HTTPException(
@@ -327,6 +412,76 @@ def create_integrations_router(
         except (AppAttestError, IntegrationsError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"provider": provider, "connection": connection}
+
+    @router.post("/integrations/apple_health/device-sync")
+    async def sync_apple_health(
+        body: HealthKitSyncRequest,
+        user: User = Depends(current_user),
+    ) -> Dict[str, Any]:
+        """Import a signed, bounded HealthKit projection from this iPhone.
+
+        The native bridge signs the digest of the exact opaque payload. The
+        server validates that assertion and the active device grant in the
+        same transaction that upserts tenant-scoped observations.
+        """
+        try:
+            raw_payload = _decode_healthkit_payload(body.payload)
+            payload = HealthKitPayload.model_validate_json(raw_payload)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="O lote do Apple Health é inválido ou excede os limites.",
+            ) from exc
+        now = datetime.now(timezone.utc)
+        for sample in payload.samples:
+            if sample.observed_at < now - _HEALTHKIT_MAX_AGE:
+                raise HTTPException(
+                    status_code=409,
+                    detail="O lote do Apple Health contém dados antigos demais.",
+                )
+            if sample.observed_at > now + _HEALTHKIT_MAX_FUTURE:
+                raise HTTPException(
+                    status_code=409,
+                    detail="O lote do Apple Health contém uma data futura inválida.",
+                )
+        resource_id = _healthkit_resource_id(body.device_id, raw_payload)
+        normalized = [
+            {
+                "sample_id": sample.sample_id,
+                "kind": sample.kind,
+                "value": sample.value,
+                "unit": sample.unit,
+                "observed_at": sample.observed_at.isoformat(),
+            }
+            for sample in payload.samples
+        ]
+        try:
+            with life.connection.transaction():
+                attest.verify_assertion(
+                    user.id,
+                    purpose="health_sync",
+                    resource_id=resource_id,
+                    confirmation_method="",
+                    device_id=body.device_id,
+                    challenge_id=body.app_attest.challenge_id,
+                    challenge=body.app_attest.challenge,
+                    key_id=body.app_attest.key_id,
+                    assertion=body.app_attest.assertion,
+                )
+                synced = integrations.ingest_healthkit_samples(
+                    user.id,
+                    device_id=body.device_id,
+                    samples=normalized,
+                )
+        except (AppAttestError, IntegrationsError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        connection = integrations.overview(user.id)["providers"]
+        health = next(item for item in connection if item["id"] == "apple_health")
+        return {
+            "provider": "apple_health",
+            "synced": synced,
+            "last_sync_at": health["connection"]["last_sync_at"],
+        }
 
     @router.post("/integrations/{provider}/sync")
     def sync_provider(

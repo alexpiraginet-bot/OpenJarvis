@@ -608,7 +608,7 @@ export interface DeviceAttestationChallenge {
 }
 
 export const issueDeviceAttestationChallenge = (
-  purpose: 'attest' | 'device_grant' | 'native_action' | 'finance',
+  purpose: 'attest' | 'device_grant' | 'native_action' | 'finance' | 'health_sync',
   deviceId: string,
   resourceId = '',
   confirmationMethod: '' | ConfirmationMethod = '',
@@ -663,6 +663,23 @@ export const registerDeviceGrant = (
       },
     },
   );
+
+/** Import a native HealthKit projection bound to one App Attest assertion. */
+export const syncAppleHealth = (
+  deviceId: string,
+  payload: string,
+  proof: AppAttestProof,
+) =>
+  post<IntegrationSyncResult>('/integrations/apple_health/device-sync', {
+    device_id: deviceId,
+    payload,
+    app_attest: {
+      challenge_id: proof.challengeId,
+      challenge: proof.challenge,
+      key_id: proof.keyId,
+      assertion: proof.assertion,
+    },
+  });
 
 /** Cancela a autorização pendente e/ou revoga a conexão do provedor. */
 export const disconnectIntegration = (provider: string) =>
