@@ -7,6 +7,7 @@ import {
   calendarConnectionAllowsContext,
   confirmedProposalSucceeded,
   corePixelAlpha,
+  deriveJarvisCorePresence,
   voiceProposalDecision,
   voiceProposalIndex,
 } from './JarvisCore';
@@ -57,6 +58,21 @@ describe('corePixelAlpha', () => {
 
   it('never increases the source alpha', () => {
     expect(corePixelAlpha(255, 255, 255, 96)).toBe(96);
+  });
+});
+
+describe('JarvisCore presence integration', () => {
+  it.each([
+    [{ voiceStatus: 'denied' }, 'error'],
+    [{ voiceStatus: 'idle', resolving: true }, 'executing'],
+    [{ voiceStatus: 'speaking' }, 'speaking'],
+    [{ voiceStatus: 'listening' }, 'listening'],
+    [{ voiceStatus: 'thinking', submitting: true }, 'thinking'],
+    [{ voiceStatus: 'idle', dialogueStatus: 'Sincronizando contexto' }, 'loading'],
+    [{ voiceStatus: 'idle', success: true }, 'success'],
+    [{ voiceStatus: 'idle' }, 'idle'],
+  ] as const)('maps %o to %s', (signals, expected) => {
+    expect(deriveJarvisCorePresence(signals)).toBe(expected);
   });
 });
 
@@ -295,5 +311,8 @@ describe('inline Jarvis panel', () => {
     expect(markup).toContain('name="jarvis-message"');
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain('Contexto: Finanças');
+    expect(markup).toContain('data-presence="idle"');
+    expect(markup).toContain('/assets/aether-neural-core-768.jpg');
+    expect(markup).not.toContain('/aether-neural-core.png');
   });
 });

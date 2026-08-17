@@ -28,6 +28,8 @@ import type {
   CoachSessionDetail,
   Measurement,
   TrainingCheckin,
+  TrainingCheckinInput,
+  TrainingCompletionInput,
   TrainingProfileInput,
   TrainingSession,
   TrainingSport,
@@ -172,22 +174,157 @@ export function TrainingSteps({ steps }: { steps: TrainingStep[] }) {
   );
 }
 
-function NumberField({
+type TrainingCheckinDraft = Record<keyof TrainingCheckinInput, string>;
+type TrainingCompletionDraft = Record<keyof TrainingCompletionInput, string>;
+type TrainingProfileDraft = Omit<
+  TrainingProfileInput,
+  | 'current_weekly_km'
+  | 'longest_recent_run_km'
+  | 'session_minutes'
+  | 'weekly_days'
+> & {
+  current_weekly_km: string;
+  longest_recent_run_km: string;
+  session_minutes: string;
+  weekly_days: string;
+};
+
+const SCORE_RULES = {
+  fallback: 0,
+  integer: true,
+  max: 10,
+  min: 0,
+} as const;
+
+function parseNumericDraft(
+  value: string,
+  { fallback, integer, max, min }: NumericFieldRules,
+): number {
+  const draft = value.trim();
+  const parsed = draft === '' ? fallback : Number(draft.replace(',', '.'));
+  const finite = Number.isFinite(parsed) ? parsed : fallback;
+  const rounded = integer ? Math.round(finite) : finite;
+  return Math.max(min, Math.min(max, rounded));
+}
+
+function normalizeNumericDraft(
+  value: string,
+  rules: NumericFieldRules,
+): string {
+  const normalized = String(parseNumericDraft(value, rules));
+  const { integer } = rules;
+  return integer ? normalized : normalized.replace('.', ',');
+}
+
+type NumericFieldRules = {
+  fallback: number;
+  integer?: boolean;
+  max: number;
+  min: number;
+};
+
+export function trainingCheckinInputFromDraft(
+  draft: TrainingCheckinDraft,
+): TrainingCheckinInput {
+  return {
+    motivation: parseNumericDraft(draft.motivation, SCORE_RULES),
+    notes: draft.notes,
+    pain: parseNumericDraft(draft.pain, SCORE_RULES),
+    sleep_quality: parseNumericDraft(draft.sleep_quality, SCORE_RULES),
+    soreness: parseNumericDraft(draft.soreness, SCORE_RULES),
+    stress: parseNumericDraft(draft.stress, SCORE_RULES),
+  };
+}
+
+export function trainingCompletionInputFromDraft(
+  draft: TrainingCompletionDraft,
+): TrainingCompletionInput {
+  return {
+    actual_duration_min: parseNumericDraft(draft.actual_duration_min, {
+      fallback: 0,
+      integer: true,
+      max: 300,
+      min: 0,
+    }),
+    completion_pct: parseNumericDraft(draft.completion_pct, {
+      fallback: 0,
+      integer: true,
+      max: 100,
+      min: 0,
+    }),
+    energy: parseNumericDraft(draft.energy, SCORE_RULES),
+    notes: draft.notes,
+    pain: parseNumericDraft(draft.pain, SCORE_RULES),
+    rpe: parseNumericDraft(draft.rpe, SCORE_RULES),
+  };
+}
+
+export function trainingProfileInputFromDraft(
+  draft: TrainingProfileDraft,
+): TrainingProfileInput {
+  return {
+    ...draft,
+    current_weekly_km: parseNumericDraft(draft.current_weekly_km, {
+      fallback: 0,
+      max: 250,
+      min: 0,
+    }),
+    longest_recent_run_km: parseNumericDraft(draft.longest_recent_run_km, {
+      fallback: 0,
+      max: 100,
+      min: 0,
+    }),
+    session_minutes: parseNumericDraft(draft.session_minutes, {
+      fallback: 20,
+      integer: true,
+      max: 120,
+      min: 20,
+    }),
+    weekly_days: parseNumericDraft(draft.weekly_days, {
+      fallback: 2,
+      integer: true,
+      max: 6,
+      min: 2,
+    }),
+  };
+}
+
+export function FitnessNumericField({
+  fallback,
+  integer = false,
   label,
+  max,
+  min,
   value,
   onChange,
 }: {
+  fallback: number;
+  integer?: boolean;
   label: string;
-  value: number;
-  onChange: (value: number) => void;
+  max: number;
+  min: number;
+  value: string;
+  onChange: (value: string) => void;
 }) {
   return (
-    <Field
-      label={label}
-      value={String(value)}
-      onChange={(next) => onChange(Math.max(0, Math.min(10, Number(next) || 0)))}
-      type="number"
-    />
+    <div className="oj-field">
+      <label className="oj-label">
+        {label}
+        <input
+          className="oj-input"
+          inputMode={integer ? 'numeric' : 'decimal'}
+          pattern={integer ? '[0-9]*' : undefined}
+          type="text"
+          value={value}
+          onBlur={() =>
+            onChange(
+              normalizeNumericDraft(value, { fallback, integer, max, min }),
+            )
+          }
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </label>
+    </div>
   );
 }
 
@@ -199,20 +336,20 @@ function SessionExperience({
   onChanged: () => void;
 }) {
   const detail = useLoader(() => fetchCoachSession(sessionId), [sessionId]);
-  const [checkin, setCheckin] = useState({
-    sleep_quality: 7,
-    soreness: 3,
-    stress: 4,
-    motivation: 7,
-    pain: 0,
+  const [checkin, setCheckin] = useState<TrainingCheckinDraft>({
+    sleep_quality: '7',
+    soreness: '3',
+    stress: '4',
+    motivation: '7',
+    pain: '0',
     notes: '',
   });
-  const [completion, setCompletion] = useState({
-    completion_pct: 100,
-    actual_duration_min: 45,
-    rpe: 6,
-    energy: 7,
-    pain: 0,
+  const [completion, setCompletion] = useState<TrainingCompletionDraft>({
+    completion_pct: '100',
+    actual_duration_min: '45',
+    rpe: '6',
+    energy: '7',
+    pain: '0',
     notes: '',
   });
   const [busy, setBusy] = useState('');
@@ -222,7 +359,10 @@ function SessionExperience({
     setBusy('checkin');
     setError('');
     try {
-      await submitCoachCheckin(sessionId, checkin);
+      await submitCoachCheckin(
+        sessionId,
+        trainingCheckinInputFromDraft(checkin),
+      );
       detail.reload();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : 'Falha no check-in');
@@ -235,7 +375,10 @@ function SessionExperience({
     setBusy('complete');
     setError('');
     try {
-      await completeCoachSession(sessionId, completion);
+      await completeCoachSession(
+        sessionId,
+        trainingCompletionInputFromDraft(completion),
+      );
       detail.reload();
       onChanged();
     } catch (exc) {
@@ -282,11 +425,11 @@ function SessionExperience({
       {!data.checkin && data.session.status === 'planned' && (
         <Section title="Check-in antes de começar">
           <div className="oj-coach-metric-grid">
-            <NumberField label="Sono 0–10" value={checkin.sleep_quality} onChange={(value) => setCheckin({ ...checkin, sleep_quality: value })} />
-            <NumberField label="Dores musculares" value={checkin.soreness} onChange={(value) => setCheckin({ ...checkin, soreness: value })} />
-            <NumberField label="Estresse" value={checkin.stress} onChange={(value) => setCheckin({ ...checkin, stress: value })} />
-            <NumberField label="Motivação" value={checkin.motivation} onChange={(value) => setCheckin({ ...checkin, motivation: value })} />
-            <NumberField label="Dor localizada" value={checkin.pain} onChange={(value) => setCheckin({ ...checkin, pain: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Sono 0–10" value={checkin.sleep_quality} onChange={(value) => setCheckin({ ...checkin, sleep_quality: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Dores musculares" value={checkin.soreness} onChange={(value) => setCheckin({ ...checkin, soreness: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Estresse" value={checkin.stress} onChange={(value) => setCheckin({ ...checkin, stress: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Motivação" value={checkin.motivation} onChange={(value) => setCheckin({ ...checkin, motivation: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Dor localizada" value={checkin.pain} onChange={(value) => setCheckin({ ...checkin, pain: value })} />
           </div>
           <Field label="Observação" value={checkin.notes} onChange={(notes) => setCheckin({ ...checkin, notes })} placeholder="Como você está hoje?" />
           <Button disabled={busy === 'checkin'} onClick={saveCheckin}>
@@ -298,11 +441,11 @@ function SessionExperience({
       {data.session.status === 'planned' && data.checkin && (
         <Section title="Feedback após a sessão">
           <div className="oj-coach-metric-grid">
-            <Field label="Conclusão (%)" value={String(completion.completion_pct)} onChange={(value) => setCompletion({ ...completion, completion_pct: Math.max(0, Math.min(100, Number(value) || 0)) })} type="number" />
-            <Field label="Duração (min)" value={String(completion.actual_duration_min)} onChange={(value) => setCompletion({ ...completion, actual_duration_min: Math.max(0, Number(value) || 0) })} type="number" />
-            <NumberField label="Esforço RPE" value={completion.rpe} onChange={(value) => setCompletion({ ...completion, rpe: value })} />
-            <NumberField label="Energia" value={completion.energy} onChange={(value) => setCompletion({ ...completion, energy: value })} />
-            <NumberField label="Dor" value={completion.pain} onChange={(value) => setCompletion({ ...completion, pain: value })} />
+            <FitnessNumericField fallback={0} integer label="Conclusão (%)" max={100} min={0} value={completion.completion_pct} onChange={(value) => setCompletion({ ...completion, completion_pct: value })} />
+            <FitnessNumericField fallback={0} integer label="Duração (min)" max={300} min={0} value={completion.actual_duration_min} onChange={(value) => setCompletion({ ...completion, actual_duration_min: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Esforço RPE" value={completion.rpe} onChange={(value) => setCompletion({ ...completion, rpe: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Energia" value={completion.energy} onChange={(value) => setCompletion({ ...completion, energy: value })} />
+            <FitnessNumericField {...SCORE_RULES} label="Dor" value={completion.pain} onChange={(value) => setCompletion({ ...completion, pain: value })} />
           </div>
           <Field label="Observação" value={completion.notes} onChange={(notes) => setCompletion({ ...completion, notes })} placeholder="O que funcionou ou limitou?" />
           <Button disabled={busy === 'complete'} onClick={saveCompletion}>
@@ -426,18 +569,18 @@ export function CoachPlan({ onChanged }: { onChanged: () => void }) {
 
 export function CoachProfile({ onChanged }: { onChanged: () => void }) {
   const coach = useLoader(fetchCoachOverview);
-  const [form, setForm] = useState<TrainingProfileInput>({
+  const [form, setForm] = useState<TrainingProfileDraft>({
     primary_sport: 'running',
     secondary_sports: ['strength'],
     primary_goal: 'general_fitness',
     target_distance_km: 0,
     target_date: null,
     level: 'beginner',
-    weekly_days: 3,
+    weekly_days: '3',
     available_weekdays: [1, 3, 5],
-    session_minutes: 45,
-    current_weekly_km: 0,
-    longest_recent_run_km: 0,
+    session_minutes: '45',
+    current_weekly_km: '0',
+    longest_recent_run_km: '0',
     equipment: [],
     limitations: '',
   });
@@ -456,11 +599,11 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
       target_distance_km: profile.target_distance_km,
       target_date: profile.target_date,
       level: profile.level,
-      weekly_days: profile.weekly_days,
+      weekly_days: String(profile.weekly_days),
       available_weekdays: profile.available_weekdays,
-      session_minutes: profile.session_minutes,
-      current_weekly_km: profile.current_weekly_km,
-      longest_recent_run_km: profile.longest_recent_run_km,
+      session_minutes: String(profile.session_minutes),
+      current_weekly_km: String(profile.current_weekly_km).replace('.', ','),
+      longest_recent_run_km: String(profile.longest_recent_run_km).replace('.', ','),
       equipment: profile.equipment,
       limitations: profile.limitations,
     });
@@ -478,7 +621,8 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
   }
 
   async function saveProfile() {
-    const scheduleError = trainingProfileScheduleError(form);
+    const profile = trainingProfileInputFromDraft(form);
+    const scheduleError = trainingProfileScheduleError(profile);
     if (scheduleError) {
       setError(scheduleError);
       return;
@@ -487,7 +631,7 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
     setError('');
     try {
       await saveCoachProfile({
-        ...form,
+        ...profile,
         equipment: equipment.split(',').map((item) => item.trim()).filter(Boolean),
       });
       setMessage('Perfil salvo. O motor já pode prescrever seu plano.');
@@ -501,7 +645,8 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
   }
 
   async function buildPlan() {
-    const scheduleError = trainingProfileScheduleError(form);
+    const profile = trainingProfileInputFromDraft(form);
+    const scheduleError = trainingProfileScheduleError(profile);
     if (scheduleError) {
       setError(scheduleError);
       return;
@@ -510,7 +655,7 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
     setError('');
     try {
       await saveCoachProfile({
-        ...form,
+        ...profile,
         equipment: equipment.split(',').map((item) => item.trim()).filter(Boolean),
       });
       await generateCoachPlan(todayIso(), 8);
@@ -548,10 +693,10 @@ export function CoachProfile({ onChanged }: { onChanged: () => void }) {
           { value: 'intermediate', label: 'Intermediário' },
           { value: 'advanced', label: 'Avançado' },
         ]} />
-        <Field label="Sessões por semana" value={String(form.weekly_days)} onChange={(value) => setForm({ ...form, weekly_days: Number(value) || 2 })} type="number" />
-        <Field label="Minutos por sessão" value={String(form.session_minutes)} onChange={(value) => setForm({ ...form, session_minutes: Number(value) || 20 })} type="number" />
-        <Field label="Volume atual (km/semana)" value={String(form.current_weekly_km)} onChange={(value) => setForm({ ...form, current_weekly_km: Number(value) || 0 })} type="number" />
-        <Field label="Maior sessão recente (km)" value={String(form.longest_recent_run_km)} onChange={(value) => setForm({ ...form, longest_recent_run_km: Number(value) || 0 })} type="number" />
+        <FitnessNumericField fallback={2} integer label="Sessões por semana" max={6} min={2} value={form.weekly_days} onChange={(value) => setForm({ ...form, weekly_days: value })} />
+        <FitnessNumericField fallback={20} integer label="Minutos por sessão" max={120} min={20} value={form.session_minutes} onChange={(value) => setForm({ ...form, session_minutes: value })} />
+        <FitnessNumericField fallback={0} label="Volume atual (km/semana)" max={250} min={0} value={form.current_weekly_km} onChange={(value) => setForm({ ...form, current_weekly_km: value })} />
+        <FitnessNumericField fallback={0} label="Maior sessão recente (km)" max={100} min={0} value={form.longest_recent_run_km} onChange={(value) => setForm({ ...form, longest_recent_run_km: value })} />
         <Field label="Equipamentos" value={equipment} onChange={setEquipment} placeholder="halteres, elástico, ergômetro" />
         <Field label="Limitações e histórico" value={form.limitations} onChange={(limitations) => setForm({ ...form, limitations })} placeholder="Lesões, dores, restrições confirmadas" />
       </div>

@@ -1,5 +1,7 @@
 import Combine
+import Foundation
 import LocalAuthentication
+import SwiftUI
 
 protocol DeviceAuthenticating {
     func authenticate(
@@ -56,16 +58,49 @@ struct LocalDeviceAuthenticator: DeviceAuthenticating {
 final class BiometricLock: ObservableObject {
     @Published private(set) var isUnlocked: Bool
     @Published private(set) var isAuthenticating = false
+    @Published private(set) var isContentObscured = false
     @Published private(set) var message = "Confirme sua identidade para acessar sua vida."
 
     private let authenticator: DeviceAuthenticating
+    private let backgroundGracePeriod: TimeInterval
+    private let clock: () -> TimeInterval
+    private var backgroundedAt: TimeInterval?
 
     init(
         initiallyUnlocked: Bool = false,
-        authenticator: DeviceAuthenticating = LocalDeviceAuthenticator()
+        authenticator: DeviceAuthenticating = LocalDeviceAuthenticator(),
+        backgroundGracePeriod: TimeInterval = 5 * 60,
+        clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         isUnlocked = initiallyUnlocked
         self.authenticator = authenticator
+        self.backgroundGracePeriod = max(0, backgroundGracePeriod)
+        self.clock = clock
+    }
+
+    func scenePhaseDidChange(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            let returnedAfterGracePeriod = backgroundedAt.map {
+                clock() - $0 >= backgroundGracePeriod
+            } ?? false
+            backgroundedAt = nil
+            isContentObscured = false
+
+            if returnedAfterGracePeriod {
+                lock()
+            }
+            unlock()
+        case .inactive:
+            isContentObscured = true
+        case .background:
+            isContentObscured = true
+            if backgroundedAt == nil {
+                backgroundedAt = clock()
+            }
+        @unknown default:
+            lock()
+        }
     }
 
     func lock() {

@@ -201,17 +201,19 @@ def create_integrations_router(
     credencial tem onde ser guardada até um cofre real ser configurado.
     """
     router = APIRouter(tags=["life-integrations"])
+    attest = app_attest or AppAttestStore(life)
+    native_device_missing_config = getattr(attest, "missing_config", ())
     integrations = IntegrationsStore(
         life,
         vault=vault,
         oauth_callback_available=vault is not None and oauth_client is not None,
+        native_device_missing_config=native_device_missing_config,
     )
     sync_service = (
         IntegrationSyncService(life, vault, oauth_client)
         if vault is not None and oauth_client is not None
         else None
     )
-    attest = app_attest or AppAttestStore(life)
 
     def current_user(
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),

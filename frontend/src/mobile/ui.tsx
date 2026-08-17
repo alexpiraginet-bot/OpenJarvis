@@ -3,6 +3,10 @@
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { motion, useDragControls } from 'motion/react';
+import { shouldDismissVerticalDrag } from './dragDismiss';
+import { JarvisPresence } from './JarvisPresence';
+import type { JarvisPresenceState } from './jarvisPresenceState';
 
 // -- Formatting --------------------------------------------------------------
 
@@ -148,8 +152,14 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="oj-empty">{children}</div>;
 }
 
-export function Spinner() {
-  return <div className="oj-spinner" role="status" aria-label="Carregando" />;
+export function Spinner({
+  label = 'Preparando especialista Jarvis',
+  state = 'loading',
+}: {
+  label?: string;
+  state?: Extract<JarvisPresenceState, 'boot' | 'loading'>;
+} = {}) {
+  return <JarvisPresence state={state} variant="compact" label={label} />;
 }
 
 export function ProgressBar({ pct, tone }: { pct: number; tone?: string }) {
@@ -247,6 +257,8 @@ export function Sheet({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const dragControls = useDragControls();
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -263,11 +275,42 @@ export function Sheet({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="oj-sheet" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="oj-grabber" />
+      <motion.div
+        className="oj-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        drag="y"
+        dragControls={dragControls}
+        dragListener={false}
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={{ top: 0, bottom: 0.68 }}
+        dragMomentum={false}
+        onDragEnd={(_event, info) => {
+          const viewportHeight =
+            window.visualViewport?.height ?? window.innerHeight;
+          if (
+            shouldDismissVerticalDrag({
+              offsetY: info.offset.y,
+              velocityY: info.velocity.y,
+              viewportHeight,
+            })
+          ) {
+            onClose();
+          }
+        }}
+      >
+        <motion.button
+          type="button"
+          className="oj-grabber"
+          data-drag-handle="true"
+          aria-label={`Arraste para baixo ou toque para fechar ${title}`}
+          onPointerDown={(event) => dragControls.start(event)}
+          onClick={onClose}
+        />
         <div className="oj-sheet-title">{title}</div>
         {children}
-      </div>
+      </motion.div>
     </div>
   );
 

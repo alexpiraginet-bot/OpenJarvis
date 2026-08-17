@@ -64,6 +64,28 @@ describe('Springboard health surface', () => {
     expect(markup).toContain('750 ml hoje');
     expect(markup).toContain('aria-label="Saúde, 2 pendência(s)"');
     expect(markup).toContain('Especialista de saúde');
+    expect(markup).toContain('data-presence="idle"');
+    expect(markup).toContain('/assets/aether-neural-core-768.jpg');
+    expect(markup).not.toContain('/aether-neural-core.png');
+  });
+
+  it('keeps initial Visão 360 synchronization visibly alive', () => {
+    const markup = renderToStaticMarkup(
+      <Springboard
+        today={null}
+        loading
+        error=""
+        userName="Alex"
+        onOpenApp={vi.fn()}
+        onAskJarvis={vi.fn()}
+        assistantOpen={false}
+        assistantPanel={null}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('data-presence="loading"');
+    expect(markup).toContain('Sincronizando sua visão 360');
   });
 
   it('uses the central core as the only Jarvis entry point', () => {
@@ -116,5 +138,26 @@ describe('Springboard health surface', () => {
     expect(markup).not.toContain('role="dialog"');
     expect(markup).not.toContain('aria-modal');
     expect(markup).not.toContain('oj-command-overlay');
+  });
+
+  it('makes the horizontal Visão 360 carousel discoverable', () => {
+    const markup = renderToStaticMarkup(
+      <Springboard
+        today={TODAY}
+        loading={false}
+        error=""
+        userName="Alex"
+        onOpenApp={vi.fn()}
+        onAskJarvis={vi.fn()}
+        assistantOpen={false}
+        assistantPanel={null}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('Deslize para ver todas as áreas');
+    expect(markup).toContain('aria-label="Áreas da Visão 360"');
+    expect(markup).toContain('aria-describedby="oj-life-overview-hint"');
+    expect(markup).toContain('tabindex="0"');
   });
 });

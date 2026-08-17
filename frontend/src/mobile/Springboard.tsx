@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { type ComponentType, type ReactNode, useEffect, useRef } from 'react';
 import { ConnectionsPanel } from './apps/ConnectionsApp';
+import { JarvisPresence } from './JarvisPresence';
 import type { AppId, ShellAppId, Today } from './types';
 import { Empty, formatLongDate, formatMoney, Spinner } from './ui';
 
@@ -110,7 +111,9 @@ export function Springboard({
     });
   }, [assistantOpen]);
 
-  if (loading && !today) return <Spinner />;
+  if (loading && !today) {
+    return <Spinner label="Sincronizando sua visão 360" />;
+  }
 
   const alerts = today?.alerts ?? [];
   const visible = alerts.slice(0, WIDGET_ALERT_LIMIT);
@@ -160,9 +163,15 @@ export function Springboard({
           <section className="oj-life-overview" aria-label="Visão 360 da sua vida">
             <div className="oj-life-overview-head">
               <span>Visão 360</span>
-              <small>dados de hoje</small>
+              <small id="oj-life-overview-hint">Deslize para ver todas as áreas</small>
             </div>
-            <div className="oj-life-overview-track">
+            <div
+              className="oj-life-overview-track"
+              role="region"
+              aria-label="Áreas da Visão 360"
+              aria-describedby="oj-life-overview-hint"
+              tabIndex={0}
+            >
               <button type="button" onClick={() => onOpenApp('finance')}>
                 <span><Wallet size={15} /> Finanças</span>
                 <strong>{formatMoney(today.finance.balance_cents, today.currency)}</strong>
@@ -228,8 +237,11 @@ export function Springboard({
             aria-controls="jarvis-inline-controls"
             aria-expanded={assistantOpen}
           >
-            <img src="/aether-neural-core.png" alt="" />
-            <span className="oj-orbit-core-pulse" aria-hidden="true" />
+            <JarvisPresence
+              state={loading ? 'loading' : 'idle'}
+              variant="orbital"
+              label={loading ? 'Atualizando sua visão 360' : 'Núcleo Jarvis pronto'}
+            />
             <span className="oj-orbit-core-label">
               <strong>JARVIS</strong>
               <small>NEURAL CORE</small>

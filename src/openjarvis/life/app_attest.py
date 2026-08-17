@@ -279,7 +279,7 @@ class AppAttestStore:
             or os.environ.get("APPLE_BUNDLE_ID", "com.lextechnology.jarvislife")
         ).strip()
         self._bundle_version = (
-            bundle_version or os.environ.get("APPLE_BUNDLE_VERSION", "5")
+            bundle_version or os.environ.get("APPLE_BUNDLE_VERSION", "")
         ).strip()
         self._environment = (
             environment or os.environ.get("APPLE_APP_ATTEST_ENVIRONMENT", "production")
@@ -289,6 +289,18 @@ class AppAttestStore:
         self._validation_categories = validation_categories
         self._root_certificate_pem = root_certificate_pem
         self._now = now
+
+    @property
+    def missing_config(self) -> tuple[str, ...]:
+        """Names of server settings required before native grants can succeed."""
+        missing = []
+        if not self._team_id:
+            missing.append("APPLE_TEAM_ID")
+        if not self._bundle_id:
+            missing.append("APPLE_BUNDLE_ID")
+        if not self._bundle_version:
+            missing.append("APPLE_BUNDLE_VERSION")
+        return tuple(missing)
 
     def issue_challenge(
         self,

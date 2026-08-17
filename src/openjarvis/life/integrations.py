@@ -387,6 +387,7 @@ class NullCredentialVault:
 def _availability(
     spec: ProviderSpec,
     callback_available: Optional[bool] = None,
+    native_device_missing_config: Sequence[str] = (),
 ) -> Tuple[str, Tuple[str, ...]]:
     """Camada 1 do estado: o que este deployment pode oferecer de verdade.
 
@@ -397,6 +398,8 @@ def _availability(
     if spec.stage == "coming_soon":
         return "coming_soon", ()
     if spec.stage == "device_only":
+        if native_device_missing_config:
+            return "needs_setup", tuple(native_device_missing_config)
         return "device_only", ()
     required = (*spec.env_vars, _BASE_URL_ENV)
     missing = tuple(name for name in required if not os.environ.get(name))
@@ -442,6 +445,7 @@ class IntegrationsStore:
         vault: Optional[CredentialVault] = None,
         now: Optional[Callable[[], datetime]] = None,
         oauth_callback_available: Optional[bool] = None,
+        native_device_missing_config: Sequence[str] = (),
     ) -> None:
         self._db: Database = life.connection
         self._vault: CredentialVault = (
@@ -449,6 +453,7 @@ class IntegrationsStore:
         )
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._oauth_callback_available = oauth_callback_available
+        self._native_device_missing_config = tuple(native_device_missing_config)
 
     @property
     def connection(self) -> Database:
@@ -484,7 +489,11 @@ class IntegrationsStore:
         providers: List[Dict[str, Any]] = []
         connected = attention = 0
         for spec in PROVIDERS.values():
-            availability, missing = _availability(spec, self._oauth_callback_available)
+            availability, missing = _availability(
+                spec,
+                self._oauth_callback_available,
+                self._native_device_missing_config,
+            )
             prerequisites = list(spec.prerequisites)
             if (
                 spec.auth_kind == "oauth"
@@ -652,7 +661,11 @@ class IntegrationsStore:
         não configurados, device-only ou ainda não disponíveis.
         """
         spec = _require_provider(provider_id)
-        availability, missing = _availability(spec, self._oauth_callback_available)
+        availability, missing = _availability(
+            spec,
+            self._oauth_callback_available,
+            self._native_device_missing_config,
+        )
         if availability == "coming_soon":
             raise IntegrationUnavailableError(
                 f"{spec.label} ainda não está disponível nesta versão.",

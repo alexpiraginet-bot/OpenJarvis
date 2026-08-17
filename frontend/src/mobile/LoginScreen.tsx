@@ -3,8 +3,20 @@
 import { Fingerprint, ShieldCheck, Waves } from 'lucide-react';
 import { useState } from 'react';
 import { login, register } from './api';
+import { JarvisPresence } from './JarvisPresence';
+import type { JarvisPresenceState } from './jarvisPresenceState';
 import type { LifeUser } from './types';
 import { Button, Field } from './ui';
+
+export function getLoginPresence(
+  mode: 'login' | 'register',
+  busy: boolean,
+): { state: JarvisPresenceState; label: string } {
+  if (!busy) return { state: 'idle', label: 'Núcleo Jarvis pronto' };
+  return mode === 'register'
+    ? { state: 'loading', label: 'Construindo seu perfil Jarvis' }
+    : { state: 'loading', label: 'Sincronizando seu perfil Jarvis' };
+}
 
 export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -13,6 +25,7 @@ export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const presence = getLoginPresence(mode, busy);
 
   async function submit() {
     if (!email.trim() || !password) {
@@ -42,17 +55,20 @@ export function LoginScreen({ onAuth }: { onAuth: (user: LifeUser) => void }) {
         <span className="oj-login-system-id">JL / 05</span>
       </div>
 
-      <div className="oj-login-reactor" aria-hidden="true">
-        <span className="oj-login-orbit oj-login-orbit--outer" />
-        <span className="oj-login-orbit oj-login-orbit--middle" />
-        <span className="oj-login-orbit oj-login-orbit--inner" />
-        <span className="oj-login-sweep" />
-        <img src="/aether-neural-core.png" alt="" />
-        <span className="oj-login-core-pulse" />
-        <span className="oj-login-coordinate oj-login-coordinate--left">
+      <div className="oj-login-reactor">
+        <span className="oj-login-orbit oj-login-orbit--outer" aria-hidden="true" />
+        <span className="oj-login-orbit oj-login-orbit--middle" aria-hidden="true" />
+        <span className="oj-login-orbit oj-login-orbit--inner" aria-hidden="true" />
+        <span className="oj-login-sweep" aria-hidden="true" />
+        <JarvisPresence
+          state={presence.state}
+          variant="login"
+          label={presence.label}
+        />
+        <span className="oj-login-coordinate oj-login-coordinate--left" aria-hidden="true">
           IDENTITY<br />ENCRYPTED
         </span>
-        <span className="oj-login-coordinate oj-login-coordinate--right">
+        <span className="oj-login-coordinate oj-login-coordinate--right" aria-hidden="true">
           CORE LINK<br />STANDBY
         </span>
       </div>

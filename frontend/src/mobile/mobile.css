@@ -20,7 +20,14 @@
   --oj-radius: 22px;
 
   position: fixed;
-  inset: 0;
+  top: var(--oj-visual-viewport-offset-top, 0px);
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 100dvh;
+  height: var(--oj-visual-viewport-height, 100dvh);
   overflow: hidden;
   color: var(--oj-ink);
   font-family:
@@ -29,9 +36,8 @@
     radial-gradient(90% 62% at 50% 42%, rgba(0, 109, 179, 0.2), transparent 64%),
     radial-gradient(60% 40% at 78% 88%, rgba(223, 162, 64, 0.06), transparent 70%),
     linear-gradient(180deg, #030711 0%, #010207 100%);
-  /* Respect the notch and the home indicator on real hardware. */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right)
-    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  /* Absolute child layers own their safe-area insets. */
+  padding: 0;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -320,7 +326,11 @@
 }
 
 .oj-scroll {
+  width: 100%;
+  max-width: 100%;
   height: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -2943,7 +2953,7 @@ input:focus-visible {
 }
 
 .oj-btn--sm {
-  min-height: 38px;
+  min-height: 44px;
 }
 
 .oj-check {
@@ -4285,7 +4295,13 @@ input:focus-visible {
 
 .oj-home {
   gap: 13px;
-  padding: 15px 14px calc(30px + env(safe-area-inset-bottom));
+  width: 100%;
+  min-width: 0;
+  padding:
+    calc(15px + env(safe-area-inset-top, 0px))
+    calc(14px + env(safe-area-inset-right, 0px))
+    calc(30px + env(safe-area-inset-bottom, 0px))
+    calc(14px + env(safe-area-inset-left, 0px));
 }
 
 .oj-home-head {
@@ -4372,6 +4388,11 @@ input:focus-visible {
   padding: 11px;
 }
 
+.oj-life-overview-track:focus-visible {
+  outline: 2px solid var(--oj-cyan);
+  outline-offset: -3px;
+}
+
 .oj-life-overview-track > button {
   --oj-summary-rgb: 66, 231, 255;
   position: relative;
@@ -4437,7 +4458,7 @@ input:focus-visible {
 }
 
 .oj-orbit {
-  width: min(100%, 404px);
+  width: min(calc(100% - 28px), 404px);
   aspect-ratio: 1 / 1.08;
   margin: 2px auto -2px;
   overflow: visible;
@@ -4992,7 +5013,7 @@ input:focus-visible {
 
 @media (max-width: 400px) {
   .oj-orbit {
-    width: min(100%, 370px);
+    width: min(calc(100% - 28px), 370px);
   }
 
   .oj-orbit-app {
@@ -5032,8 +5053,9 @@ input:focus-visible {
 }
 
 .oj-app-layer {
-  inset: max(8px, env(safe-area-inset-top)) max(0px, env(safe-area-inset-right)) 0
-    max(10px, env(safe-area-inset-left));
+  inset: max(8px, env(safe-area-inset-top, 0px))
+    max(0px, env(safe-area-inset-right, 0px)) 0
+    max(10px, env(safe-area-inset-left, 0px));
   border: 1px solid rgba(141, 239, 255, 0.25);
   border-right: 0;
   border-bottom: 0;
@@ -5089,6 +5111,34 @@ input:focus-visible {
     inset 0 1px 0 rgba(218, 251, 255, 0.08),
     0 9px 22px -15px rgba(0, 0, 0, 0.9);
   clip-path: none;
+}
+
+.oj-segmented[data-scrollable='true'] {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.oj-segmented[data-scrollable='true']::-webkit-scrollbar {
+  display: none;
+}
+
+.oj-segmented-hint {
+  margin: 8px 16px -4px;
+  color: var(--oj-ink-dim);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
+.oj-segmented[data-scrollable='true'] .oj-segment {
+  min-width: 88px;
+  flex: 0 0 23%;
+  scroll-snap-align: start;
 }
 
 .oj-segment:first-child {
@@ -5160,4 +5210,315 @@ input:focus-visible {
   .oj-btn:active {
     transform: none;
   }
+}
+
+/* Unified Jarvis presence --------------------------------------------------
+ * Hero/login/orbit variants use one WebGL canvas with the source asset kept
+ * underneath as an honest fallback. Compact waits reuse the same state and
+ * asset without opening extra GPU contexts inside app tabs.
+ */
+
+.oj-presence {
+  --oj-presence-color: var(--oj-cyan);
+  position: relative;
+  display: grid;
+  min-width: 0;
+  place-items: center;
+  isolation: isolate;
+}
+
+.oj-presence-asset,
+.oj-presence-canvas {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: opacity 160ms ease-out, filter 160ms ease-out;
+}
+
+.oj-presence-asset {
+  opacity: 0.88;
+  mix-blend-mode: screen;
+  filter: saturate(1.12) contrast(1.08);
+}
+
+.oj-presence-canvas {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.oj-presence[data-renderer='webgl'] .oj-presence-asset {
+  opacity: 0;
+}
+
+.oj-presence[data-renderer='webgl'] .oj-presence-canvas {
+  opacity: 1;
+}
+
+.oj-presence[data-presence='error'] .oj-presence-asset,
+.oj-presence[data-presence='error'] .oj-presence-canvas {
+  filter: saturate(0.82) sepia(0.18) hue-rotate(312deg) contrast(1.12);
+}
+
+.oj-presence-progress {
+  position: absolute;
+  z-index: 2;
+  width: 74%;
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-top-color: var(--oj-presence-color);
+  border-right-color: color-mix(in srgb, var(--oj-presence-color) 36%, transparent);
+  border-radius: 50%;
+  opacity: 0;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--oj-presence-color) 48%, transparent));
+  pointer-events: none;
+}
+
+.oj-presence[data-presence='boot'] .oj-presence-progress,
+.oj-presence[data-presence='loading'] .oj-presence-progress,
+.oj-presence[data-presence='thinking'] .oj-presence-progress,
+.oj-presence[data-presence='executing'] .oj-presence-progress {
+  opacity: 0.92;
+  animation: oj-presence-progress 1.35s linear infinite;
+}
+
+.oj-presence--hero {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+}
+
+.oj-presence--hero .oj-presence-asset,
+.oj-presence--hero .oj-presence-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.oj-presence--login {
+  position: absolute;
+  z-index: 1;
+  inset: 4%;
+}
+
+.oj-login-reactor .oj-presence--login .oj-presence-asset,
+.oj-login-reactor .oj-presence--login .oj-presence-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-mask-image: radial-gradient(
+    circle at center,
+    #000 0%,
+    #000 58%,
+    rgba(0, 0, 0, 0.92) 66%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(
+    circle at center,
+    #000 0%,
+    #000 58%,
+    rgba(0, 0, 0, 0.92) 66%,
+    transparent 75%
+  );
+}
+
+.oj-presence--orbital {
+  position: absolute;
+  z-index: 1;
+  inset: -6%;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.oj-orbit-core .oj-presence--orbital .oj-presence-asset,
+.oj-orbit-core .oj-presence--orbital .oj-presence-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: 50%;
+  -webkit-mask-image: radial-gradient(
+    circle at center,
+    #000 0%,
+    #000 58%,
+    rgba(0, 0, 0, 0.92) 66%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(
+    circle at center,
+    #000 0%,
+    #000 58%,
+    rgba(0, 0, 0, 0.92) 66%,
+    transparent 75%
+  );
+}
+
+.oj-presence--inline {
+  grid-template-columns: 26px minmax(0, auto);
+  gap: 7px;
+  color: rgba(183, 236, 246, 0.68);
+}
+
+.oj-presence--inline .oj-presence-asset {
+  grid-area: auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.oj-presence--inline .oj-presence-progress {
+  top: 1px;
+  left: 1px;
+  width: 24px;
+}
+
+.oj-presence-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oj-presence--compact {
+  width: min(100%, 320px);
+  min-height: 116px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 14px;
+  align-self: center;
+  justify-self: center;
+  margin: auto;
+  padding: 18px;
+  color: rgba(205, 247, 255, 0.84);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.oj-presence--compact .oj-presence-asset {
+  grid-area: auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+}
+
+.oj-presence--compact .oj-presence-progress {
+  top: 22px;
+  left: 22px;
+  width: 56px;
+}
+
+@keyframes oj-presence-progress {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* Deliberate handles keep drag-to-dismiss away from scrolling form content. */
+
+.oj-grabber,
+.oj-app-drag-handle {
+  position: relative;
+  display: block;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+
+.oj-grabber:active,
+.oj-app-drag-handle:active {
+  cursor: grabbing;
+}
+
+.oj-grabber {
+  width: 64px;
+  height: 44px;
+  margin: -6px auto -4px;
+}
+
+.oj-grabber::before,
+.oj-app-drag-handle::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 38px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(105, 226, 247, 0.44);
+  box-shadow: 0 0 12px rgba(66, 231, 255, 0.18);
+  content: '';
+}
+
+.oj-app-drag-handle {
+  z-index: 4;
+  width: 100%;
+  flex: 0 0 44px;
+  border-radius: 27px 0 0;
+  background: rgba(1, 8, 15, 0.72);
+}
+
+.oj-app-layer .oj-window-bar {
+  border-radius: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oj-presence-asset,
+  .oj-presence-canvas {
+    transition: none;
+  }
+
+  .oj-presence-progress {
+    animation: none !important;
+  }
+}
+
+/* Runtime-measured env() values back the CSS contract in WKWebView. The
+ * visual-viewport offset moves the fixed root; these insets pad its absolute
+ * child layers, so they are intentionally not added to each other here. */
+
+.oj-home {
+  padding:
+    calc(15px + max(env(safe-area-inset-top, 0px), var(--oj-safe-area-inset-top, 0px)))
+    calc(14px + max(env(safe-area-inset-right, 0px), var(--oj-safe-area-inset-right, 0px)))
+    calc(30px + max(env(safe-area-inset-bottom, 0px), var(--oj-safe-area-inset-bottom, 0px)))
+    calc(14px + max(env(safe-area-inset-left, 0px), var(--oj-safe-area-inset-left, 0px)));
+}
+
+.oj-login {
+  padding:
+    calc(18px + max(env(safe-area-inset-top, 0px), var(--oj-safe-area-inset-top, 0px)))
+    calc(18px + max(env(safe-area-inset-right, 0px), var(--oj-safe-area-inset-right, 0px)))
+    calc(22px + max(env(safe-area-inset-bottom, 0px), var(--oj-safe-area-inset-bottom, 0px)))
+    calc(18px + max(env(safe-area-inset-left, 0px), var(--oj-safe-area-inset-left, 0px)));
+}
+
+.oj-jarvis {
+  padding-top: max(env(safe-area-inset-top, 0px), var(--oj-safe-area-inset-top, 0px));
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--oj-safe-area-inset-bottom, 0px));
+}
+
+.oj-app-layer {
+  inset:
+    max(8px, env(safe-area-inset-top, 0px), var(--oj-safe-area-inset-top, 0px))
+    max(0px, env(safe-area-inset-right, 0px), var(--oj-safe-area-inset-right, 0px))
+    0
+    max(10px, env(safe-area-inset-left, 0px), var(--oj-safe-area-inset-left, 0px));
+}
+
+.oj-app-layer .oj-window {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--oj-safe-area-inset-bottom, 0px));
+}
+
+.oj-window-body {
+  padding-bottom: calc(32px + max(env(safe-area-inset-bottom, 0px), var(--oj-safe-area-inset-bottom, 0px)));
+}
+
+.oj-sheet {
+  padding-bottom: calc(24px + max(env(safe-area-inset-bottom, 0px), var(--oj-safe-area-inset-bottom, 0px)));
 }

@@ -7,8 +7,13 @@
  * never leave, you go deeper and come back.
  */
 
-import { useCallback, useEffect, useReducer, useState } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import {
+  AnimatePresence,
+  motion,
+  useDragControls,
+  useReducedMotion,
+} from 'motion/react';
 import { AppWindow, type Tab } from './AppWindow';
 import { fetchMe, fetchToday, getToken, logout } from './api';
 import {
@@ -40,10 +45,12 @@ import { ProjectsTab, TasksTab } from './apps/WorkApp';
 import { JarvisCore } from './JarvisCore';
 import { LoginScreen } from './LoginScreen';
 import { buildAppPresentationMotion } from './appMotion';
+import { shouldDismissVerticalDrag } from './dragDismiss';
 import { initialMobileShellState, mobileShellReducer } from './mobileShell';
 import { Springboard } from './Springboard';
 import type { LifeUser, ShellAppId, Today } from './types';
 import { Button, Spinner } from './ui';
+import { bindMobileVisualViewport } from './visualViewport';
 import './mobile.css';
 
 const TITLES: Record<ShellAppId, string> = {
@@ -68,6 +75,8 @@ const SPECIALISTS: Record<ShellAppId, string> = {
 
 export default function MobileApp() {
   const reduceMotion = useReducedMotion();
+  const appDragControls = useDragControls();
+  const mobileRootRef = useRef<HTMLDivElement | null>(null);
   const [user, setUser] = useState<LifeUser | null>(null);
   const [checking, setChecking] = useState(true);
   const [shell, dispatchShell] = useReducer(
@@ -78,6 +87,11 @@ export default function MobileApp() {
   const [today, setToday] = useState<Today | null>(null);
   const [loadingToday, setLoadingToday] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!mobileRootRef.current) return;
+    return bindMobileVisualViewport(mobileRootRef.current);
+  }, []);
 
   // Restore the session from the stored token before showing anything, so a
   // returning client never sees a login flash.
@@ -138,15 +152,15 @@ export default function MobileApp() {
 
   if (checking) {
     return (
-      <div className="oj-mobile" translate="no">
-        <Spinner />
+      <div ref={mobileRootRef} className="oj-mobile" translate="no">
+        <Spinner state="boot" label="Inicializando seu Jarvis" />
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="oj-mobile" translate="no">
+      <div ref={mobileRootRef} className="oj-mobile" translate="no">
         <LoginScreen
           onAuth={(authenticated) => {
             setUser(authenticated);
@@ -168,7 +182,7 @@ export default function MobileApp() {
   );
 
   return (
-    <div className="oj-mobile" translate="no">
+    <div ref={mobileRootRef} className="oj-mobile" translate="no">
       <motion.div
         className="oj-shell-layer"
         data-app-open={Boolean(shell.openApp)}
@@ -223,6 +237,25 @@ export default function MobileApp() {
             animate={appPresentation.sheet.animate}
             exit={appPresentation.sheet.exit}
             transition={appPresentation.sheet.transition}
+            drag="y"
+            dragControls={appDragControls}
+            dragListener={false}
+            dragConstraints={{ top: 0, bottom: 0 }}
+            dragElastic={{ top: 0, bottom: 0.54 }}
+            dragMomentum={false}
+            onDragEnd={(_event, info) => {
+              const viewportHeight =
+                window.visualViewport?.height ?? window.innerHeight;
+              if (
+                shouldDismissVerticalDrag({
+                  offsetY: info.offset.y,
+                  velocityY: info.velocity.y,
+                  viewportHeight,
+                })
+              ) {
+                closeApp();
+              }
+            }}
           >
             <AppWindow
               title={TITLES[shell.openApp]}
@@ -231,6 +264,7 @@ export default function MobileApp() {
               activeTab={activeTab}
               onTabChange={setTab}
               onClose={closeApp}
+              onDragHandlePointerDown={(event) => appDragControls.start(event)}
               onAskJarvis={() =>
                 dispatchShell({
                   type: 'open_assistant',

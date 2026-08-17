@@ -1,11 +1,151 @@
 import CryptoKit
 import DeviceCheck
+import SwiftUI
+import WebKit
 import XCTest
 @testable import JarvisLife
 
 final class JarvisConfigurationTests: XCTestCase {
+    private final class PendingAuthenticator: DeviceAuthenticating {
+        private(set) var requestCount = 0
+
+        func authenticate(
+            reason: String,
+            completion: @escaping (Result<Void, Error>) -> Void
+        ) {
+            requestCount += 1
+        }
+    }
+
     private func appAttestError(_ code: DCError.Code) -> NSError {
         NSError(domain: DCErrorDomain, code: code.rawValue)
+    }
+
+    private func firstSubview<T: UIView>(
+        of type: T.Type,
+        in view: UIView
+    ) -> T? {
+        if let match = view as? T {
+            return match
+        }
+        for subview in view.subviews {
+            if let match = firstSubview(of: type, in: subview) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    func testInactiveSystemSheetObscuresContentWithoutLockingOrPrompting() {
+        var uptime: TimeInterval = 1_000
+        let authenticator = PendingAuthenticator()
+        let lock = BiometricLock(
+            initiallyUnlocked: true,
+            authenticator: authenticator,
+            backgroundGracePeriod: 300,
+            clock: { uptime }
+        )
+
+        lock.scenePhaseDidChange(.inactive)
+
+        XCTAssertTrue(lock.isUnlocked)
+        XCTAssertTrue(lock.isContentObscured)
+        XCTAssertEqual(authenticator.requestCount, 0)
+
+        uptime += 1
+        lock.scenePhaseDidChange(.active)
+
+        XCTAssertTrue(lock.isUnlocked)
+        XCTAssertFalse(lock.isContentObscured)
+        XCTAssertEqual(authenticator.requestCount, 0)
+    }
+
+    @MainActor
+    func testBriefBackgroundReturnKeepsSessionUnlocked() {
+        var uptime: TimeInterval = 1_000
+        let authenticator = PendingAuthenticator()
+        let lock = BiometricLock(
+            initiallyUnlocked: true,
+            authenticator: authenticator,
+            backgroundGracePeriod: 300,
+            clock: { uptime }
+        )
+
+        lock.scenePhaseDidChange(.background)
+        uptime += 299
+        lock.scenePhaseDidChange(.active)
+
+        XCTAssertTrue(lock.isUnlocked)
+        XCTAssertFalse(lock.isContentObscured)
+        XCTAssertEqual(authenticator.requestCount, 0)
+    }
+
+    @MainActor
+    func testExpiredBackgroundReturnLocksAndRequestsAuthenticationOnce() {
+        var uptime: TimeInterval = 1_000
+        let authenticator = PendingAuthenticator()
+        let lock = BiometricLock(
+            initiallyUnlocked: true,
+            authenticator: authenticator,
+            backgroundGracePeriod: 300,
+            clock: { uptime }
+        )
+
+        lock.scenePhaseDidChange(.background)
+        uptime += 300
+        lock.scenePhaseDidChange(.active)
+
+        XCTAssertFalse(lock.isUnlocked)
+        XCTAssertFalse(lock.isContentObscured)
+        XCTAssertTrue(lock.isAuthenticating)
+        XCTAssertEqual(authenticator.requestCount, 1)
+    }
+
+    @MainActor
+    func testFirstActiveSceneRequestsAuthenticationOnce() {
+        let authenticator = PendingAuthenticator()
+        let lock = BiometricLock(
+            authenticator: authenticator,
+            backgroundGracePeriod: 300,
+            clock: { 1_000 }
+        )
+
+        lock.scenePhaseDidChange(.active)
+        lock.scenePhaseDidChange(.active)
+
+        XCTAssertFalse(lock.isUnlocked)
+        XCTAssertTrue(lock.isAuthenticating)
+        XCTAssertEqual(authenticator.requestCount, 1)
+    }
+
+    @MainActor
+    func testLockedContentCreatesWebViewBeforeAuthenticationCompletes() async {
+        let authenticator = PendingAuthenticator()
+        let lock = BiometricLock(authenticator: authenticator)
+        let controller = UIHostingController(
+            rootView: ContentView(biometricLock: lock)
+        )
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+
+        window.rootViewController = controller
+        window.isHidden = false
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        controller.view.layoutIfNeeded()
+        var webView = firstSubview(of: WKWebView.self, in: controller.view)
+        for _ in 0..<20 where webView == nil {
+            await Task.yield()
+            controller.view.layoutIfNeeded()
+            webView = firstSubview(of: WKWebView.self, in: controller.view)
+        }
+        let didCreateWebView = webView != nil
+
+        window.isHidden = true
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        window.rootViewController = nil
+
+        XCTAssertFalse(lock.isUnlocked)
+        XCTAssertTrue(didCreateWebView)
     }
 
     func testHealthKitUsageDescriptionsDeclareReadOnlyAccess() {

@@ -38,20 +38,15 @@ import {
   requestNativeCalendarContext,
 } from './nativeIntegrations';
 import { DialogueSessionController } from './dialogueSession';
+import { JarvisPresence } from './JarvisPresence';
+import {
+  deriveJarvisPresenceState,
+  getJarvisPresenceCopy,
+  presenceNeedsProgress,
+  type JarvisPresenceState,
+} from './jarvisPresenceState';
 import type { IntegrationConnection, ShellAppId, Today } from './types';
 import { useVoice, type VoiceState, type VoiceStatus } from './useVoice';
-
-/** Palette per status. The HUD's colour *is* its state readout. */
-const TONES: Record<VoiceStatus, { core: string; ring: string; label: string }> = {
-  idle: { core: '#0e7490', ring: 'rgba(34, 211, 238, 0.45)', label: 'Em espera' },
-  listening: { core: '#22d3ee', ring: 'rgba(34, 211, 238, 0.95)', label: 'Ouvindo' },
-  thinking: { core: '#f59e0b', ring: 'rgba(245, 158, 11, 0.9)', label: 'Pensando' },
-  speaking: { core: '#34d399', ring: 'rgba(52, 211, 153, 0.95)', label: 'Respondendo' },
-  denied: { core: '#ef4444', ring: 'rgba(239, 68, 68, 0.8)', label: 'Sem microfone' },
-};
-
-const TICKS = 72;
-const CORE_TEXTURE_SIZE = 768;
 
 const CONTEXT_LABELS: Record<ShellAppId, string> = {
   finance: 'Finanças',
@@ -82,6 +77,37 @@ export function corePixelAlpha(
   const luminance = Math.max(red, green, blue);
   const extracted = Math.max(0, Math.min(255, Math.round((luminance - 8) * 6)));
   return Math.min(originalAlpha, extracted);
+}
+
+export function deriveJarvisCorePresence({
+  voiceStatus,
+  resolving = false,
+  submitting = false,
+  dialogueStatus = '',
+  success = false,
+  error = false,
+}: {
+  voiceStatus: VoiceStatus;
+  resolving?: boolean;
+  submitting?: boolean;
+  dialogueStatus?: string;
+  success?: boolean;
+  error?: boolean;
+}): JarvisPresenceState {
+  return deriveJarvisPresenceState({
+    error:
+      error ||
+      voiceStatus === 'denied' ||
+      dialogueStatus.toLocaleLowerCase('pt-BR').startsWith('falha'),
+    executing: resolving,
+    speaking: voiceStatus === 'speaking',
+    listening: voiceStatus === 'listening',
+    thinking: submitting || voiceStatus === 'thinking',
+    profileBuilding: /sincronizando|restaurando|preparando/i.test(
+      dialogueStatus,
+    ),
+    success,
+  });
 }
 
 export function confirmedProposalSucceeded(
@@ -211,7 +237,6 @@ export function JarvisCore({
   onRefresh: () => void;
 }) {
   const embedded = variant === 'embedded';
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dialogue = useMemo(
     () => new DialogueSessionController(userId),
     [userId],
@@ -223,9 +248,10 @@ export function JarvisCore({
   const [dialogueStatus, setDialogueStatus] = useState('Pronto para conversar');
   const [proposals, setProposals] = useState<JarvisActionProposal[]>([]);
   const [resolving, setResolving] = useState('');
-  // The draw loop must see the current status without being torn down and
-  // rebuilt every time it changes.
-  const statusRef = useRef<VoiceStatus>('idle');
+  const [presenceSuccess, setPresenceSuccess] = useState(false);
+  const presenceSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   // The speech handler is created *before* `useVoice` returns, so it reaches
   // the controls through a ref rather than closing over a binding that does
   // not exist yet. `busy` is a ref too: recognition fires from outside React,
@@ -239,12 +265,39 @@ export function JarvisCore({
   const proposalsRef = useRef<JarvisActionProposal[]>([]);
   const resolvingRef = useRef('');
 
+  const interruptPresenceSuccess = useCallback(() => {
+    if (presenceSuccessTimerRef.current) {
+      clearTimeout(presenceSuccessTimerRef.current);
+      presenceSuccessTimerRef.current = null;
+    }
+    setPresenceSuccess(false);
+  }, []);
+
+  const triggerPresenceSuccess = useCallback(() => {
+    interruptPresenceSuccess();
+    setPresenceSuccess(true);
+    presenceSuccessTimerRef.current = setTimeout(() => {
+      presenceSuccessTimerRef.current = null;
+      setPresenceSuccess(false);
+    }, 1800);
+  }, [interruptPresenceSuccess]);
+
+  useEffect(
+    () => () => {
+      if (presenceSuccessTimerRef.current) {
+        clearTimeout(presenceSuccessTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     proposalsRef.current = proposals;
   }, [proposals]);
 
   useEffect(() => {
     let active = true;
+    interruptPresenceSuccess();
     if (contextApp) {
       dialogue.beginSpecialistContext(contextApp);
       setAnswer('');
@@ -266,11 +319,15 @@ export function JarvisCore({
       setDialogueStatus(
         snapshot.conversationId ? 'Contexto restaurado' : 'Pronto para conversar',
       );
+      if (snapshot.conversationId) triggerPresenceSuccess();
+    }).catch(() => {
+      if (!active) return;
+      setDialogueStatus('Falha ao restaurar contexto');
     });
     return () => {
       active = false;
     };
-  }, [contextApp, dialogue]);
+  }, [contextApp, dialogue, interruptPresenceSuccess, triggerPresenceSuccess]);
 
   const resolveProposal = useCallback(
     async (
@@ -279,8 +336,12 @@ export function JarvisCore({
       confirmationMethod: ConfirmationMethod = 'explicit',
     ) => {
       if (resolvingRef.current) return;
+      interruptPresenceSuccess();
       resolvingRef.current = proposal.id;
       setResolving(proposal.id);
+      setDialogueStatus(
+        approved ? 'Executando ação confirmada' : 'Cancelando ação',
+      );
       try {
         if (approved) {
           const result =
@@ -302,13 +363,16 @@ export function JarvisCore({
             throw new Error(confirmationFailureMessage(result.proposal));
           }
           setAnswer('Ação confirmada e registrada.');
+          setDialogueStatus('Ação concluída');
           voiceRef.current?.speak('Ação confirmada e registrada.');
           onRefresh();
         } else {
           await cancelAction(proposal.id);
           setAnswer('Ação cancelada.');
+          setDialogueStatus('Ação cancelada');
           voiceRef.current?.speak('Ação cancelada.');
         }
+        triggerPresenceSuccess();
         setProposals((current) => {
           const remaining = current.filter((item) => item.id !== proposal.id);
           proposalsRef.current = remaining;
@@ -318,13 +382,14 @@ export function JarvisCore({
         const message =
           exc instanceof Error ? exc.message : 'Não consegui concluir a ação.';
         setAnswer(message);
+        setDialogueStatus('Falha ao executar ação');
         voiceRef.current?.speak(message);
       } finally {
         resolvingRef.current = '';
         setResolving('');
       }
     },
-    [onRefresh],
+    [interruptPresenceSuccess, onRefresh, triggerPresenceSuccess],
   );
 
   const handleQuestion = useCallback(
@@ -366,9 +431,9 @@ export function JarvisCore({
       }
 
       busyRef.current = true;
+      interruptPresenceSuccess();
       setSubmitting(true);
       controls.setStatus('thinking');
-      statusRef.current = 'thinking';
       setDialogueStatus('Processando sua solicitação');
       setHistory((current) => [
         ...current,
@@ -386,6 +451,7 @@ export function JarvisCore({
         setProposals(nextProposals);
         controls.speak(result.answer);
         setDialogueStatus('Resposta pronta');
+        triggerPresenceSuccess();
         // A spoken exchange may have changed the data behind the badges.
         onRefresh();
       } catch (exc) {
@@ -393,6 +459,7 @@ export function JarvisCore({
           exc instanceof Error ? exc.message : 'Não consegui responder agora.';
         setAnswer(message);
         controls.speak(message);
+        interruptPresenceSuccess();
         setDialogueStatus('Falha ao responder');
       } finally {
         busyRef.current = false;
@@ -403,261 +470,18 @@ export function JarvisCore({
         }
       }
     },
-    [dialogue, onRefresh, resolveProposal],
+    [
+      dialogue,
+      interruptPresenceSuccess,
+      onRefresh,
+      resolveProposal,
+      triggerPresenceSuccess,
+    ],
   );
   handleQuestionRef.current = handleQuestion;
 
   const voice = useVoice(handleQuestion);
   voiceRef.current = voice;
-  statusRef.current = voice.status;
-
-  // -- The HUD -------------------------------------------------------------
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const context = canvas.getContext('2d');
-    if (!context) return;
-
-    let frame = 0;
-    let rotation = 0;
-    let destroyed = false;
-    let coreTexture: HTMLCanvasElement | null = null;
-    const reduceMotion = window.matchMedia?.(
-      '(prefers-reduced-motion: reduce)',
-    ).matches;
-
-    const textureImage = new Image();
-    textureImage.decoding = 'async';
-    textureImage.onload = () => {
-      if (destroyed) return;
-      const texture = document.createElement('canvas');
-      texture.width = CORE_TEXTURE_SIZE;
-      texture.height = CORE_TEXTURE_SIZE;
-      const textureContext = texture.getContext('2d', {
-        willReadFrequently: true,
-      });
-      if (!textureContext) return;
-      textureContext.drawImage(
-        textureImage,
-        0,
-        0,
-        CORE_TEXTURE_SIZE,
-        CORE_TEXTURE_SIZE,
-      );
-      const pixels = textureContext.getImageData(
-        0,
-        0,
-        CORE_TEXTURE_SIZE,
-        CORE_TEXTURE_SIZE,
-      );
-      for (let index = 0; index < pixels.data.length; index += 4) {
-        pixels.data[index + 3] = corePixelAlpha(
-          pixels.data[index],
-          pixels.data[index + 1],
-          pixels.data[index + 2],
-          pixels.data[index + 3],
-        );
-      }
-      textureContext.clearRect(0, 0, CORE_TEXTURE_SIZE, CORE_TEXTURE_SIZE);
-      textureContext.putImageData(pixels, 0, 0);
-      coreTexture = texture;
-    };
-    textureImage.src = '/aether-neural-core.png';
-
-    const resize = () => {
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      const { clientWidth, clientHeight } = canvas;
-      canvas.width = clientWidth * ratio;
-      canvas.height = clientHeight * ratio;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    };
-    resize();
-    window.addEventListener('resize', resize);
-
-    const draw = () => {
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      const cx = width / 2;
-      const cy = height / 2;
-      const base = Math.min(width, height) * 0.3;
-      const tone = TONES[statusRef.current];
-      const level = voice.levelRef.current;
-      const spectrum = voice.spectrumRef.current;
-      const elapsed = performance.now() / 1000;
-
-      context.clearRect(0, 0, width, height);
-      if (!reduceMotion) {
-        const velocity =
-          statusRef.current === 'thinking'
-            ? 0.011
-            : statusRef.current === 'listening'
-              ? 0.0065
-              : 0.0035;
-        rotation += velocity;
-      }
-
-      // The source artwork is converted to a luminance alpha mask once, then
-      // rendered as a voice-reactive texture. That removes the opaque square
-      // permanently and lets the neural filaments move independently of the
-      // HUD rings instead of rotating a flat image.
-      if (coreTexture) {
-        const breathing = reduceMotion ? 1 : 1 + Math.sin(elapsed * 1.35) * 0.018;
-        const reactive = reduceMotion ? 0 : Math.min(level * 0.09, 0.09);
-        const size = base * 2.56 * (breathing + reactive);
-        const half = size / 2;
-
-        context.save();
-        context.translate(cx, cy);
-        context.rotate(rotation * 0.16);
-        context.globalCompositeOperation = 'lighter';
-        context.globalAlpha = 0.16 + Math.min(level * 0.12, 0.12);
-        context.shadowColor = tone.core;
-        context.shadowBlur = 30 + level * 26;
-        context.drawImage(coreTexture, -half * 1.035, -half * 1.035, size * 1.035, size * 1.035);
-        context.restore();
-
-        context.save();
-        context.translate(cx, cy);
-        context.rotate(-rotation * 0.08);
-        context.globalCompositeOperation = 'screen';
-        context.globalAlpha = 0.72;
-        context.drawImage(coreTexture, -half, -half, size, size);
-
-        if (!reduceMotion) {
-          const slices = 48;
-          const sourceWidth = coreTexture.width / slices;
-          const destinationWidth = size / slices;
-          const distortion = size * (0.004 + Math.min(level, 1) * 0.012);
-          context.globalCompositeOperation = 'lighter';
-          context.globalAlpha = 0.34 + Math.min(level * 0.18, 0.18);
-          for (let slice = 0; slice < slices; slice += 1) {
-            const normalized = (slice + 0.5) / slices;
-            const phase = elapsed * 1.8 + normalized * Math.PI * 4;
-            const offsetX = Math.sin(phase) * distortion;
-            const offsetY = Math.cos(phase * 0.72) * distortion * 0.9;
-            context.drawImage(
-              coreTexture,
-              slice * sourceWidth,
-              0,
-              sourceWidth + 1,
-              coreTexture.height,
-              -half + slice * destinationWidth + offsetX,
-              -half + offsetY,
-              destinationWidth + 1,
-              size,
-            );
-          }
-        }
-        context.restore();
-      }
-
-      // Outer dashed ring — slow, steady, the "system is up" signal.
-      context.save();
-      context.translate(cx, cy);
-      context.rotate(rotation);
-      context.strokeStyle = tone.ring;
-      context.globalAlpha = 0.35;
-      context.lineWidth = 1;
-      context.setLineDash([12, 18]);
-      context.beginPath();
-      context.arc(0, 0, base * 1.42, 0, Math.PI * 2);
-      context.stroke();
-      context.setLineDash([]);
-      context.restore();
-
-      // Tick ring — each tick's length is one frequency bin, so the ring
-      // literally spells out the shape of the voice.
-      context.save();
-      context.translate(cx, cy);
-      context.rotate(-rotation * 1.6);
-      context.strokeStyle = tone.ring;
-      context.lineWidth = 2;
-      for (let i = 0; i < TICKS; i += 1) {
-        const bin = spectrum[i % spectrum.length] ?? 0;
-        const energy = bin / 255;
-        const inner = base * 1.12;
-        const outer = inner + 6 + energy * 34;
-        const angle = (i / TICKS) * Math.PI * 2;
-        context.globalAlpha = 0.25 + energy * 0.75;
-        context.beginPath();
-        context.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
-        context.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
-        context.stroke();
-      }
-      context.restore();
-
-      // Three sweeping arcs at different speeds — the Stark "it's alive" cue.
-      context.save();
-      context.translate(cx, cy);
-      context.strokeStyle = tone.ring;
-      context.lineWidth = 2.5;
-      context.globalAlpha = 0.8;
-      const arcs = [
-        { radius: base * 0.95, from: rotation * 2.2, span: 1.1 },
-        { radius: base * 0.82, from: -rotation * 3.1 + 2, span: 0.8 },
-        { radius: base * 0.68, from: rotation * 1.4 + 4, span: 1.5 },
-      ];
-      for (const arc of arcs) {
-        context.beginPath();
-        context.arc(0, 0, arc.radius, arc.from, arc.from + arc.span);
-        context.stroke();
-      }
-      context.restore();
-
-      // Reactive waveform — a closed blob whose radius follows the spectrum.
-      context.save();
-      context.translate(cx, cy);
-      context.beginPath();
-      const points = 96;
-      for (let i = 0; i <= points; i += 1) {
-        const angle = (i / points) * Math.PI * 2;
-        const bin = spectrum[i % spectrum.length] ?? 0;
-        const radius = base * 0.52 + (bin / 255) * base * 0.3 + level * 8;
-        const x = Math.cos(angle) * radius;
-        const y = Math.sin(angle) * radius;
-        if (i === 0) context.moveTo(x, y);
-        else context.lineTo(x, y);
-      }
-      context.closePath();
-      context.strokeStyle = tone.core;
-      context.lineWidth = 2;
-      context.globalAlpha = 0.9;
-      context.stroke();
-      context.restore();
-
-      // The core: a glow that breathes with loudness.
-      const pulse = base * (0.3 + level * 0.22);
-      const glow = context.createRadialGradient(cx, cy, 0, cx, cy, pulse * 2.1);
-      glow.addColorStop(0, tone.core);
-      glow.addColorStop(0.35, tone.ring);
-      glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      context.save();
-      context.globalAlpha = 0.55 + level * 0.45;
-      context.fillStyle = glow;
-      context.beginPath();
-      context.arc(cx, cy, pulse * 2.1, 0, Math.PI * 2);
-      context.fill();
-      context.restore();
-
-      context.save();
-      context.fillStyle = '#ffffff';
-      context.globalAlpha = 0.85;
-      context.beginPath();
-      context.arc(cx, cy, pulse * 0.28, 0, Math.PI * 2);
-      context.fill();
-      context.restore();
-
-      frame = requestAnimationFrame(draw);
-    };
-    frame = requestAnimationFrame(draw);
-
-    return () => {
-      destroyed = true;
-      textureImage.onload = null;
-      cancelAnimationFrame(frame);
-      window.removeEventListener('resize', resize);
-    };
-  }, [voice.levelRef, voice.spectrumRef]);
 
   useEffect(() => {
     let active = true;
@@ -673,7 +497,15 @@ export function JarvisCore({
     };
   }, []);
 
-  const tone = TONES[voice.status];
+  const presenceState = deriveJarvisCorePresence({
+    voiceStatus: voice.status,
+    resolving: Boolean(resolving),
+    submitting,
+    dialogueStatus,
+    success: presenceSuccess,
+    error: Boolean(voice.error),
+  });
+  const presenceCopy = getJarvisPresenceCopy(presenceState);
   const listening = voice.status === 'listening';
   const spoken = voice.interim || voice.transcript;
 
@@ -694,10 +526,14 @@ export function JarvisCore({
     >
       {embedded ? (
         <div className="oj-embedded-command-head">
-          <div className="oj-embedded-command-state" aria-live="polite">
-            <span className="oj-hud-dot" style={{ background: tone.core }} />
+          <div className="oj-embedded-command-state">
+            <JarvisPresence
+              state={presenceState}
+              variant="inline"
+              levelRef={voice.levelRef}
+              spectrumRef={voice.spectrumRef}
+            />
             <strong>JARVIS</strong>
-            <span>{tone.label}</span>
           </div>
           <button
             type="button"
@@ -715,8 +551,11 @@ export function JarvisCore({
             <span>NEURAL CORE / VOICE OS</span>
           </div>
           <div className="oj-hud-readout" aria-live="polite">
-            <span className="oj-hud-dot" style={{ background: tone.core }} />
-            {tone.label}
+            <span
+              className="oj-hud-dot"
+              style={{ background: presenceCopy.color }}
+            />
+            {presenceCopy.label}
           </div>
           <button
             type="button"
@@ -739,13 +578,13 @@ export function JarvisCore({
           <div className="oj-hud-telemetry" aria-hidden="true">
             <span>CORE SYNC<br /><strong>100%</strong></span>
             <span>AGENTS<br /><strong>06 ONLINE</strong></span>
-            <span>VOICE LINK<br /><strong>{tone.label}</strong></span>
+            <span>VOICE LINK<br /><strong>{presenceCopy.label}</strong></span>
           </div>
-          <canvas
-            ref={canvasRef}
-            className="oj-hud-canvas"
-            role="img"
-            aria-label="Núcleo neural vivo do Jarvis"
+          <JarvisPresence
+            state={presenceState}
+            variant="hero"
+            levelRef={voice.levelRef}
+            spectrumRef={voice.spectrumRef}
           />
           <button
             type="button"
@@ -764,7 +603,7 @@ export function JarvisCore({
         role="status"
         aria-live="polite"
         aria-atomic="false"
-        aria-busy={submitting}
+        aria-busy={presenceNeedsProgress(presenceState)}
       >
         <span className="oj-visually-hidden">{dialogueStatus}</span>
         <div className="oj-hud-history" aria-label="Histórico da conversa">

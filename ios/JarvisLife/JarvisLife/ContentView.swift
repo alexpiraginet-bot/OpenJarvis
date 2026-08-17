@@ -4,24 +4,38 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var loadError: String?
     @State private var reloadID = 0
+    @StateObject private var biometricLock: BiometricLock
+
+    init(biometricLock: BiometricLock? = nil) {
 #if targetEnvironment(simulator)
-    @StateObject private var biometricLock = BiometricLock(initiallyUnlocked: true)
+        _biometricLock = StateObject(
+            wrappedValue: biometricLock ?? BiometricLock(initiallyUnlocked: true)
+        )
 #else
-    @StateObject private var biometricLock = BiometricLock()
+        _biometricLock = StateObject(
+            wrappedValue: biometricLock ?? BiometricLock()
+        )
 #endif
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if biometricLock.isUnlocked, let appURL = JarvisConfiguration.appURL() {
+            if let appURL = JarvisConfiguration.appURL() {
                 JarvisWebView(
                     appURL: appURL,
                     reloadID: reloadID,
                     loadError: $loadError
                 )
                 .ignoresSafeArea()
-            } else if biometricLock.isUnlocked {
+                .allowsHitTesting(
+                    biometricLock.isUnlocked && !biometricLock.isContentObscured
+                )
+                .accessibilityHidden(
+                    !biometricLock.isUnlocked || biometricLock.isContentObscured
+                )
+            } else {
                 FailureView(
                     title: "Configuração incompleta",
                     message: "O endereço seguro do Jarvis não foi configurado neste build.",
@@ -40,6 +54,11 @@ struct ContentView: View {
                 )
             }
 
+            if biometricLock.isContentObscured {
+                PrivacyShieldView()
+                    .zIndex(9)
+            }
+
             if !biometricLock.isUnlocked {
                 BiometricLockView(lock: biometricLock)
                     .transition(.opacity)
@@ -51,11 +70,20 @@ struct ContentView: View {
             biometricLock.unlock()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                biometricLock.unlock()
-            } else {
-                biometricLock.lock()
-            }
+            biometricLock.scenePhaseDidChange(phase)
+        }
+    }
+}
+
+private struct PrivacyShieldView: View {
+    var body: some View {
+        ZStack {
+            Color(red: 0.015, green: 0.025, blue: 0.045)
+                .ignoresSafeArea()
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 32, weight: .medium))
+                .foregroundStyle(Color.cyan)
+                .accessibilityLabel("Conteúdo do Jarvis protegido")
         }
     }
 }

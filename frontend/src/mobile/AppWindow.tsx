@@ -9,7 +9,7 @@
 
 import { BrainCircuit, ChevronLeft } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import type { ReactNode } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 
 export interface Tab {
   id: string;
@@ -25,6 +25,7 @@ export function AppWindow({
   onTabChange,
   onClose,
   onAskJarvis,
+  onDragHandlePointerDown,
 }: {
   title: string;
   specialist: string;
@@ -33,12 +34,24 @@ export function AppWindow({
   onTabChange: (id: string) => void;
   onClose: () => void;
   onAskJarvis: () => void;
+  onDragHandlePointerDown?: (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => void;
 }) {
   const reduceMotion = useReducedMotion();
   const current = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+  const hasScrollableTabs = tabs.length > 4;
 
   return (
     <div className="oj-window">
+      <button
+        type="button"
+        className="oj-app-drag-handle"
+        data-drag-handle="true"
+        aria-label={`Arraste para baixo para fechar ${title}`}
+        onPointerDown={onDragHandlePointerDown}
+        onClick={onClose}
+      />
       <div className="oj-window-bar">
         <button type="button" className="oj-back" onClick={onClose} autoFocus>
           <ChevronLeft size={22} />
@@ -66,21 +79,39 @@ export function AppWindow({
       </div>
 
       {tabs.length > 1 && (
-        <div className="oj-segmented" role="tablist" aria-label={`Seções de ${title}`}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === current.id}
-              data-active={tab.id === current.id}
-              className="oj-segment"
-              onClick={() => onTabChange(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <>
+          {hasScrollableTabs && (
+            <div id="oj-sections-hint" className="oj-segmented-hint">
+              Deslize para ver todas
+            </div>
+          )}
+          <div
+            className="oj-segmented"
+            role="tablist"
+            aria-label={
+              hasScrollableTabs
+                ? `Seções de ${title}, deslize horizontalmente para ver todas`
+                : `Seções de ${title}`
+            }
+            aria-describedby={hasScrollableTabs ? 'oj-sections-hint' : undefined}
+            data-scrollable={hasScrollableTabs || undefined}
+            tabIndex={hasScrollableTabs ? 0 : undefined}
+          >
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={tab.id === current.id}
+                data-active={tab.id === current.id}
+                className="oj-segment"
+                onClick={() => onTabChange(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       <div className="oj-window-body" role="tabpanel">

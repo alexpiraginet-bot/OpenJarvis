@@ -257,6 +257,30 @@ def test_catalog_names_missing_config_without_leaking_values(client, auth, monke
     assert "valor-sensivel" not in str(entry)
 
 
+def test_catalog_hides_native_apple_connect_without_app_attest_identity(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENJARVIS_LIFE_OPEN_SIGNUP", "1")
+    monkeypatch.delenv("APPLE_TEAM_ID", raising=False)
+    monkeypatch.delenv("APPLE_BUNDLE_VERSION", raising=False)
+    app = FastAPI()
+    router = create_life_router(str(tmp_path / "life-no-app-attest.db"))
+    app.include_router(router)
+
+    try:
+        with TestClient(app) as native_client:
+            auth = _register(native_client, "native-setup@exemplo.com")
+            for provider in ("apple_calendar", "apple_health"):
+                entry = _catalog_entry(native_client, auth, provider)
+                assert entry["availability"] == "needs_setup"
+                assert entry["missing_config"] == [
+                    "APPLE_TEAM_ID",
+                    "APPLE_BUNDLE_VERSION",
+                ]
+    finally:
+        router.life_context.close()
+
+
 # -- Connect-intent ----------------------------------------------------------
 
 
